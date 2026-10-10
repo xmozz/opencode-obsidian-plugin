@@ -149,6 +149,7 @@ export class OpenCodeChatView extends ItemView {
 		this.root = this.containerEl.children[1] as HTMLElement;
 		this.root.empty();
 		this.root.addClass("ocs-container");
+		this.applyFontSize();
 		this.buildShell();
 		this.restoreTabs();
 		if (!this.plugin.client) {
@@ -476,6 +477,12 @@ export class OpenCodeChatView extends ItemView {
 	}
 
 	// ---------- messages ----------
+
+	/** Applies the configured base font size (all UI text scales with it). */
+	applyFontSize(): void {
+		const size = Math.min(24, Math.max(9, this.plugin.settings.fontSize || 13));
+		this.root?.style.setProperty("--ocs-fs", `${size}px`);
+	}
 
 	/** Loading state while the opencode service is (re)starting. */
 	setConnecting(active: boolean, detail?: string): void {

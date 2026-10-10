@@ -202,6 +202,20 @@ class OpenCodeSettingTab extends PluginSettingTab {
 				}),
 			);
 		new Setting(containerEl)
+			.setName("Font size")
+			.setDesc("Base font size of the chat panel (everything scales with it).")
+			.addSlider((s) =>
+				s
+					.setLimits(10, 20, 1)
+					.setValue(this.plugin.settings.fontSize)
+					.setDynamicTooltip()
+					.onChange(async (v) => {
+						this.plugin.settings.fontSize = v;
+						await this.plugin.saveSettings();
+						this.plugin.chatView()?.applyFontSize();
+					}),
+			);
+		new Setting(containerEl)
 			.setName("Max tabs")
 			.addSlider((s) =>
 				s.setLimits(1, 20, 1).setValue(this.plugin.settings.maxTabs).onChange(async (v) => {
