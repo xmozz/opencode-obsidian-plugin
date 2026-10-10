@@ -777,6 +777,19 @@ button.ocs-chip-x:active {
 	border-color: var(--text-muted);
 }
 
+button.ocs-chip-add,
+button.ocs-chip-add:hover,
+button.ocs-chip-add:focus,
+button.ocs-chip-add:active,
+button.ocs-effort-btn,
+button.ocs-effort-btn:hover,
+button.ocs-effort-btn:focus,
+button.ocs-effort-btn:active {
+	background: transparent !important;
+	background-color: transparent !important;
+	box-shadow: none !important;
+}
+
 .ocs-model-selector,
 .ocs-mode-selector {
 	appearance: none;
