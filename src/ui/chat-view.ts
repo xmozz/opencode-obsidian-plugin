@@ -430,9 +430,15 @@ export class OpenCodeChatView extends ItemView {
 				"button",
 				`ocs-tab-badge ${t.tabId === this.activeTabId ? "ocs-active" : "ocs-idle"} ${t.streaming ? "ocs-streaming" : ""} ${t.attention ? "ocs-attention" : ""}`,
 			);
-			b.title = `${t.title}\n${t.sessionId}`;
-			const dot = el("span", "ocs-tab-activity-dot");
-			b.appendChild(dot);
+			b.title = t.streaming ? `${t.title}\n● writing…\n${t.sessionId}` : `${t.title}\n${t.sessionId}`;
+			if (t.streaming) {
+				const spin = el("span", "ocs-spinner ocs-tab-spinner");
+				spin.title = "writing…";
+				b.appendChild(spin);
+			} else {
+				const dot = el("span", "ocs-tab-activity-dot");
+				b.appendChild(dot);
+			}
 			b.appendChild(el("span", "ocs-tab-number", String(i + 1)));
 			const label = el(
 				"span",

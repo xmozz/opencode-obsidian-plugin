@@ -84,9 +84,25 @@
 	color: var(--text-normal);
 }
 
-.ocs-tab-badge.ocs-streaming .ocs-tab-activity-dot {
-	background: var(--text-accent);
-	animation: ocs-pulse 1s infinite alternate;
+.ocs-tab-badge.ocs-streaming {
+	border-color: var(--text-accent);
+	animation: ocs-tab-pulse 1.2s ease-in-out infinite alternate;
+}
+
+@keyframes ocs-tab-pulse {
+	from {
+		border-color: transparent;
+	}
+	to {
+		border-color: var(--text-accent);
+	}
+}
+
+.ocs-tab-spinner {
+	width: 10px;
+	height: 10px;
+	border-width: 2px;
+	flex-shrink: 0;
 }
 
 .ocs-tab-badge.ocs-attention .ocs-tab-activity-dot {
@@ -115,6 +131,7 @@
 }
 
 .ocs-tab-close {
+	display: none;
 	margin-left: 2px;
 	padding: 0 4px;
 	border-radius: 4px;
@@ -122,6 +139,10 @@
 	font-size: calc(var(--ocs-fs, 13px) - 2px);
 	line-height: 1.4;
 	flex-shrink: 0;
+}
+
+.ocs-tab-badge:hover .ocs-tab-close {
+	display: inline;
 }
 
 .ocs-tab-close:hover {
