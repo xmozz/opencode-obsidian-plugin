@@ -20,6 +20,10 @@ export interface ChatPart {
 	output?: string;
 	status?: string;
 	reasoning?: string;
+	/** Unified-diff patches for file edits (from tool metadata). */
+	diffs?: Array<{ file: string; patch: string }>;
+	/** Resolved file path for file tools (edit/write/read/…). */
+	filePath?: string;
 }
 
 export interface ChatMessage {
@@ -216,13 +220,32 @@ function parseMessage(m: AnyRecord): ChatMessage[] {
 					(typeof state.output === "string" ? state.output : "") ||
 					(typeof state.error === "string" ? state.error : "") ||
 					undefined;
+				const input = (state.input as Record<string, unknown>) ?? {};
+				const diffs: Array<{ file: string; patch: string }> = [];
+				const files = (state.metadata as AnyRecord | undefined)?.files;
+				if (Array.isArray(files)) {
+					for (const f of files as AnyRecord[]) {
+						if (typeof f?.patch === "string" && f.patch) {
+							diffs.push({
+								file: String(f.file ?? input.path ?? "file"),
+								patch: f.patch as string,
+							});
+						}
+					}
+				}
+				const filePath =
+					[String(input.path), String(input.file), String(input.filePath)].find(
+						(v) => v && v !== "undefined",
+					) ?? undefined;
 				tools.push({
 					type: "tool",
 					tool: String(p.name ?? "tool"),
 					toolId: String(p.id ?? ""),
-					input: (state.input as Record<string, unknown>) ?? {},
+					input,
 					output,
 					status: mapStatus(state.status),
+					...(diffs.length > 0 ? { diffs } : {}),
+					...(filePath ? { filePath } : {}),
 				});
 			}
 		}
@@ -240,6 +263,41 @@ function parseMessage(m: AnyRecord): ChatMessage[] {
 		];
 	}
 	return [];
+}
+
+export interface DiffLine {
+	kind: "hunk" | "add" | "del" | "ctx" | "note";
+	text: string;
+}
+
+/** Parses a unified diff into renderable lines (skips Index/---/+++ headers). */
+export function parseUnifiedDiff(patch: string): DiffLine[] {
+	const out: DiffLine[] = [];
+	let started = false;
+	for (const raw of patch.split("\n")) {
+		if (!started) {
+			if (!raw.startsWith("@@")) continue;
+			started = true;
+		}
+		if (raw.startsWith("@@")) out.push({ kind: "hunk", text: raw });
+		else if (raw.startsWith("+") && !raw.startsWith("+++"))
+			out.push({ kind: "add", text: raw });
+		else if (raw.startsWith("-") && !raw.startsWith("---"))
+			out.push({ kind: "del", text: raw });
+		else if (raw.startsWith("\\")) out.push({ kind: "note", text: raw });
+		else out.push({ kind: "ctx", text: raw.length > 0 ? raw : " " });
+	}
+	return out;
+}
+
+export function countDiff(patch: string): { added: number; removed: number } {
+	let added = 0;
+	let removed = 0;
+	for (const line of parseUnifiedDiff(patch)) {
+		if (line.kind === "add") added++;
+		else if (line.kind === "del") removed++;
+	}
+	return { added, removed };
 }
 
 function mapStatus(status: unknown): string {

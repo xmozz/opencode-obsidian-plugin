@@ -14,6 +14,8 @@ import {
 	switchAgent,
 	runSessionCommand,
 	replyPermission,
+	parseUnifiedDiff,
+	countDiff,
 	type VaultSession,
 	type ChatMessage,
 } from "../opencode/sessions";
@@ -582,7 +584,7 @@ export class OpenCodeChatView extends ItemView {
 			bubble.appendChild(det);
 		}
 		for (const t of m.tools) {
-			bubble.appendChild(this.renderTool(t.tool ?? "tool", t.input ?? {}, t.output, t.status ?? "completed"));
+			bubble.appendChild(this.renderTool(t));
 		}
 		if (m.text) {
 			const body = el("div", "ocs-msg-body");
@@ -638,25 +640,88 @@ export class OpenCodeChatView extends ItemView {
 		}
 	}
 
-	private renderTool(
-		name: string,
-		input: Record<string, unknown>,
-		output?: string,
-		status = "completed",
-	): HTMLElement {
+	private renderTool(t: {
+		tool?: string;
+		input?: Record<string, unknown>;
+		output?: string;
+		status?: string;
+		diffs?: Array<{ file: string; patch: string }>;
+		filePath?: string;
+	}): HTMLElement {
+		const name = t.tool ?? "tool";
+		const status = t.status ?? "completed";
+		const input = t.input ?? {};
 		const det = document.createElement("details");
 		det.className = `ocs-toolcall ocs-${status}`;
 		const sum = document.createElement("summary");
 		const dot = el("span", "ocs-tool-dot");
 		sum.appendChild(dot);
-		sum.appendChild(el("span", "ocs-tool-name", name));
-		const short = summarizeInput(input);
-		if (short) sum.appendChild(el("span", "ocs-tool-arg", short));
+		if (t.diffs?.length) {
+			const files = t.diffs.map((d) => this.shortPath(d.file)).join(", ");
+			const total = t.diffs.reduce(
+				(acc, d) => {
+					const c = countDiff(d.patch);
+					return { added: acc.added + c.added, removed: acc.removed + c.removed };
+				},
+				{ added: 0, removed: 0 },
+			);
+			sum.appendChild(el("span", "ocs-tool-name", `Edited ${files}`));
+			sum.appendChild(el("span", "ocs-diff-stats", `+${total.added} −${total.removed}`));
+			det.open = false;
+		} else {
+			sum.appendChild(el("span", "ocs-tool-name", name));
+			const short = t.filePath
+				? this.shortPath(t.filePath)
+				: summarizeInput(input);
+			if (short) sum.appendChild(el("span", "ocs-tool-arg", short));
+		}
 		det.appendChild(sum);
+		if (t.diffs?.length) {
+			for (const d of t.diffs) det.appendChild(this.renderFileDiff(d.file, d.patch));
+		} else if (t.filePath && (name === "write" || name === "edit")) {
+			const content = typeof input.content === "string" ? input.content : "";
+			const lines = content ? content.split("\n").length : 0;
+			det.appendChild(
+				el(
+					"div",
+					"ocs-diff-file",
+					`${name === "write" ? "Created" : "Edited"} ${this.shortPath(t.filePath)}${lines ? ` · ${lines} lines` : ""}`,
+				),
+			);
+		}
 		const inp = el("pre", "ocs-tool-input", safeJson(input));
 		det.appendChild(inp);
-		if (output) det.appendChild(el("pre", "ocs-tool-output", output.slice(0, 4000)));
+		if (t.output) det.appendChild(el("pre", "ocs-tool-output", t.output.slice(0, 4000)));
 		return det;
+	}
+
+	/** Vault-relative display path (falls back to basename). */
+	private shortPath(p: string): string {
+		const vault = this.plugin.vaultDir().replace(/\\/g, "/").replace(/\/+$/, "");
+		const norm = p.replace(/\\/g, "/");
+		if (vault && norm.toLowerCase().startsWith(vault.toLowerCase() + "/")) {
+			return norm.slice(vault.length + 1);
+		}
+		const base = norm.split("/").pop() ?? p;
+		return base;
+	}
+
+	private renderFileDiff(file: string, patch: string): HTMLElement {
+		const box = el("div", "ocs-diff");
+		box.appendChild(el("div", "ocs-diff-file", this.shortPath(file)));
+		const lines = el("div", "ocs-diff-lines");
+		const cls: Record<string, string> = {
+			hunk: "ocs-diff-hunk",
+			add: "ocs-diff-add",
+			del: "ocs-diff-del",
+			ctx: "ocs-diff-ctx",
+			note: "ocs-diff-note",
+		};
+		for (const line of parseUnifiedDiff(patch)) {
+			lines.appendChild(el("div", cls[line.kind], line.text));
+		}
+		box.appendChild(lines);
+		return box;
 	}
 
 	private async ensureLoaded(tab: TabState): Promise<void> {
@@ -1367,7 +1432,17 @@ export class OpenCodeChatView extends ItemView {
 						const name = String(
 							(data as Record<string, unknown>).name ?? "tool",
 						);
-						tool.innerHTML = `<span class="ocs-tool-dot"></span><span class="ocs-tool-name">${escapeHtml(name)}</span>`;
+						const input = (data as Record<string, unknown>).input as
+							| Record<string, unknown>
+							| undefined;
+						const rawPath =
+							(typeof input?.path === "string" && input.path) ||
+							(typeof input?.file === "string" && input.file) ||
+							"";
+						const base = rawPath
+							? String(rawPath).replace(/\\/g, "/").split("/").pop()
+							: "";
+						tool.innerHTML = `<span class="ocs-tool-dot"></span><span class="ocs-tool-name">${escapeHtml(name)}</span>${base ? `<span class="ocs-tool-arg">${escapeHtml(base)}</span>` : ""}`;
 						live.appendChild(tool);
 					}
 				}

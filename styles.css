@@ -383,6 +383,75 @@
 	overflow-y: auto;
 }
 
+/* ---- GitHub-style file diffs ---- */
+.ocs-diff {
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 8px;
+	overflow: hidden;
+	margin: 6px 0;
+}
+
+.ocs-diff-file {
+	background: var(--background-primary);
+	padding: 5px 10px;
+	font-family: var(--font-monospace);
+	font-size: calc(var(--ocs-fs, 13px) - 1px);
+	font-weight: 600;
+	border-bottom: 1px solid var(--background-modifier-border);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.ocs-diff-stats {
+	margin-left: auto;
+	font-family: var(--font-monospace);
+	font-size: calc(var(--ocs-fs, 13px) - 2px);
+	color: var(--text-muted);
+	white-space: nowrap;
+}
+
+.ocs-diff-lines {
+	font-family: var(--font-monospace);
+	font-size: calc(var(--ocs-fs, 13px) - 1px);
+	line-height: 1.5;
+	overflow-x: auto;
+	max-height: 320px;
+	overflow-y: auto;
+	user-select: text;
+	-webkit-user-select: text;
+}
+
+.ocs-diff-lines > div {
+	padding: 0 10px 0 8px;
+	white-space: pre;
+	border-left: 3px solid transparent;
+}
+
+.ocs-diff-hunk {
+	background: var(--background-modifier-hover);
+	color: var(--text-muted);
+}
+
+.ocs-diff-add {
+	background: rgba(46, 160, 67, 0.15);
+	border-left-color: #2ea043;
+}
+
+.ocs-diff-del {
+	background: rgba(248, 81, 73, 0.13);
+	border-left-color: #f85149;
+}
+
+.ocs-diff-ctx {
+	color: var(--text-muted);
+}
+
+.ocs-diff-note {
+	color: var(--text-faint);
+	font-style: italic;
+}
+
 .ocs-live-text {
 	white-space: pre-wrap;
 	line-height: 1.55;
