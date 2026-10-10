@@ -191,6 +191,9 @@ export class OpenCodeChatView extends ItemView {
 
 		const actions = el("div", "ocs-header-actions");
 		nav.appendChild(actions);
+		this.usageBadge = el("span", "ocs-usage-badge", "");
+		this.usageBadge.title = "Session cost / tokens";
+		actions.appendChild(this.usageBadge);
 		const histBtn = el("button", "ocs-icon-btn", "☰");
 		histBtn.title = "Sessions (/session) — shared with CLI";
 		histBtn.onclick = () => this.toggleHistory();
@@ -308,9 +311,6 @@ export class OpenCodeChatView extends ItemView {
 		composer.appendChild(statusRow);
 		this.statusLine = el("div", "ocs-status-line", "Not connected");
 		statusRow.appendChild(this.statusLine);
-		this.usageBadge = el("span", "ocs-usage-badge", "");
-		this.usageBadge.title = "Session cost / tokens";
-		statusRow.appendChild(this.usageBadge);
 
 		this.renderApproveBtn();
 	}
@@ -1125,11 +1125,7 @@ export class OpenCodeChatView extends ItemView {
 		}
 		this.renderModelOptions();
 		this.renderAgentOptions();
-		this.setStatus(
-			this.plugin.sharedService
-				? `Shared server · ${this.plugin.endpointUrl} · sessions synced with CLI`
-				: `Connected · ${this.plugin.endpointUrl}`,
-		);
+		this.setStatus("");
 	}
 
 	private renderModelOptions(): void {
@@ -1434,21 +1430,7 @@ export class OpenCodeChatView extends ItemView {
 					tab.streaming = false;
 					const live = this.liveAssistant.get(tab.sessionId);
 					if (live) {
-						// fold live DOM into message history
-						const textParts: string[] = [];
-						live.querySelectorAll(".ocs-live-text").forEach((n) => {
-							textParts.push(n.textContent ?? "");
-						});
-						if (textParts.join("").trim()) {
-							tab.messages.push({
-								id: `stream-${Date.now()}`,
-								role: "assistant",
-								text: textParts.join(""),
-								reasoning: [],
-								tools: [],
-								timestamp: Date.now(),
-							});
-						}
+						live.remove();
 						this.liveAssistant.delete(tab.sessionId);
 						this.liveReasoning.delete(tab.sessionId);
 					}

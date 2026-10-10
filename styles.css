@@ -33,7 +33,7 @@
 .ocs-session-strip {
 	border-bottom: 1px solid var(--background-modifier-border);
 	padding: 6px 8px;
-	background: var(--background-secondary);
+	background: transparent;
 }
 
 .ocs-input-nav-content {
@@ -179,10 +179,10 @@
 .ocs-usage-badge {
 	font-size: calc(var(--ocs-fs, 13px) - 2px);
 	color: var(--text-muted);
-	padding: 2px 8px;
-	border-radius: 999px;
-	border: 1px solid var(--background-modifier-border);
+	padding: 2px 4px;
 	white-space: nowrap;
+	background: transparent;
+	border: none;
 }
 
 .ocs-usage-badge:empty {
@@ -269,9 +269,20 @@
 	opacity: 1;
 }
 
-.ocs-copy-btn:hover {
-	background: var(--background-modifier-hover);
+.ocs-copy-btn:hover,
+.ocs-copy-btn:focus {
+	background: transparent;
+	border: none;
+	box-shadow: none;
 	color: var(--text-normal);
+	opacity: 1;
+}
+
+/* Obsidian's own code-block copy buttons: no box either */
+.ocs-msg-body .copy-code-button {
+	background: transparent !important;
+	border: none !important;
+	box-shadow: none !important;
 }
 
 .ocs-msg-body {
@@ -649,7 +660,7 @@
 .ocs-composer {
 	border-top: 1px solid var(--background-modifier-border);
 	padding: 8px;
-	background: var(--background-secondary);
+	background: transparent;
 	display: flex;
 	flex-direction: column;
 	gap: 6px;
@@ -666,21 +677,26 @@
 .ocs-model-selector,
 .ocs-mode-selector,
 .ocs-thinking-selector {
-	background: var(--background-primary);
-	border: 1px solid var(--background-modifier-border);
-	border-radius: 8px;
-	color: var(--text-normal);
-	padding: 5px 8px;
+	appearance: none;
+	-webkit-appearance: none;
+	border: none;
+	background-color: transparent;
+	background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%23888888' fill='none' stroke-width='1.5'/%3E%3C/svg%3E");
+	background-repeat: no-repeat;
+	background-position: right center;
+	color: var(--text-muted);
+	padding: 2px 16px 2px 2px;
 	font-size: calc(var(--ocs-fs, 13px) - 1px);
-	max-width: 220px;
+	max-width: 150px;
+	cursor: pointer;
 }
 
 .ocs-permission-toggle {
-	border: 1px solid var(--background-modifier-border);
-	background: var(--background-primary);
+	border: none;
+	background: transparent;
+	border-radius: 0;
 	color: var(--text-muted);
-	border-radius: 999px;
-	padding: 5px 12px;
+	padding: 2px 4px;
 	cursor: pointer;
 	font-size: calc(var(--ocs-fs, 13px) - 1px);
 }
