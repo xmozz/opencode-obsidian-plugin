@@ -6,6 +6,30 @@ import type { OpenCodeClient } from "@opencode/client";
 import { Service } from "@opencode/client/service";
 import { OpenCode } from "@opencode/client";
 import { parseEnvText } from "../settings";
+import { createNodeFetch } from "./node-fetch";
+
+/** Node-stack fetch (no renderer CORS). One instance reused everywhere. */
+const nodeFetch = createNodeFetch();
+
+/**
+ * Service.discover() probes via global fetch(), which is CORS-blocked in
+ * Obsidian's renderer. Temporarily swap in the Node-stack fetch, then
+ * restore the original — always, even on failure.
+ */
+async function discoverService(): Promise<
+	Awaited<ReturnType<typeof Service.discover>>
+> {
+	const original = globalThis.fetch;
+	if (original !== nodeFetch) {
+		(globalThis as { fetch: typeof fetch }).fetch = nodeFetch;
+		try {
+			return await Service.discover();
+		} finally {
+			(globalThis as { fetch: typeof fetch }).fetch = original;
+		}
+	}
+	return Service.discover();
+}
 
 export interface Connection {
 	client: OpenCodeClient;
@@ -219,7 +243,7 @@ async function spawnSharedService(
 		// A second `serve --service` next to a healthy one exits 0 silently —
 		// that just means someone else already won; discover below will find it.
 		try {
-			const found = await Service.discover();
+			const found = await discoverService();
 			if (found) {
 				say(`service ready at ${found.url}`);
 				child.unref?.();
@@ -300,7 +324,7 @@ export async function connectShared(
 	};
 
 	try {
-		const discovered = await Service.discover().catch(() => undefined);
+		const discovered = await discoverService().catch(() => undefined);
 		if (discovered) {
 			say(`Found running opencode service at ${discovered.url}`);
 			const conn = await finishConnect(discovered);
@@ -315,7 +339,7 @@ export async function connectShared(
 		say(`resolved binary: ${resolved.path}`);
 		say("starting opencode background service…");
 		await spawnSharedService(resolved.path, extra, attempt.events, onLog);
-		const endpoint = await Service.discover();
+		const endpoint = await discoverService();
 		if (!endpoint) {
 			throw withDetails(
 				new Error("opencode service started but is not discoverable."),
@@ -338,6 +362,7 @@ async function finishConnect(endpoint: {
 	const client = OpenCode.make({
 		baseUrl: endpoint.url,
 		headers: Service.headers(endpoint),
+		fetch: nodeFetch,
 	});
 	try {
 		await client.server.info();
