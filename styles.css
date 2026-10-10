@@ -55,7 +55,7 @@
 	align-items: center;
 	gap: 6px;
 	padding: 4px 10px;
-	border-radius: 999px;
+	border-radius: 0;
 	border: 1px solid transparent;
 	background: transparent;
 	color: var(--text-muted);
@@ -193,6 +193,16 @@
 .ocs-msg-body {
 	line-height: 1.55;
 	word-wrap: break-word;
+}
+
+.ocs-math-block {
+	display: block;
+	overflow-x: auto;
+	padding: 4px 0;
+}
+
+.ocs-math-inline {
+	display: inline;
 }
 
 .ocs-msg-body h2,

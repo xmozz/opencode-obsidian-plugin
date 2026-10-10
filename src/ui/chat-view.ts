@@ -1,4 +1,4 @@
-import { ItemView, WorkspaceLeaf, Notice, Menu } from "obsidian";
+import { ItemView, WorkspaceLeaf, Notice, Menu, MarkdownRenderer } from "obsidian";
 import type { OpenCodeClient } from "@opencode/client";
 import type OpenCodePlugin from "../main";
 import {
@@ -68,6 +68,13 @@ function escapeHtml(s: string): string {
 		.replace(/&/g, "&amp;")
 		.replace(/</g, "&lt;")
 		.replace(/>/g, "&gt;");
+}
+
+/** Avoids turning prices ("costs $5 and $10") into math. */
+function isPlausibleInlineMath(text: string, dollarIndex: number, content: string): boolean {
+	if (!content || /^\s|\s$/.test(content)) return false;
+	if (dollarIndex > 0 && /[0-9A-Za-z]/.test(text[dollarIndex - 1] ?? "")) return false;
+	return true;
 }
 
 /** Minimal markdown-ish rendering: code blocks, inline code, bold, links, line breaks. */
@@ -536,10 +543,56 @@ export class OpenCodeChatView extends ItemView {
 		}
 		if (m.text) {
 			const body = el("div", "ocs-msg-body");
-			body.innerHTML = renderRich(m.text);
+			this.renderBodyText(body, m.text);
 			wrap.appendChild(body);
 		}
 		return wrap;
+	}
+
+	/**
+	 * Renders message text: code stays code, $…$/$$…$$ is typeset with
+	 * Obsidian's built-in MathJax, everything else goes through the
+	 * lightweight rich renderer.
+	 */
+	private renderBodyText(container: HTMLElement, text: string): void {
+		const token = /(```[\s\S]*?```)|(`[^`\n]+`)|\$\$([\s\S]+?)\$\$|\$([^$\n]+?)\$/g;
+		let last = 0;
+		let match: RegExpExecArray | null;
+		const frag = document.createDocumentFragment();
+		const mathJobs: Array<{ el: HTMLElement; src: string; block: boolean }> = [];
+		const appendRich = (segment: string): void => {
+			if (!segment) return;
+			const div = document.createElement("div");
+			div.innerHTML = renderRich(segment);
+			while (div.firstChild) frag.appendChild(div.firstChild);
+		};
+		while ((match = token.exec(text)) !== null) {
+			const [full, fence, inlineCode, blockMath, inlineMath] = match;
+			if (match.index > last) appendRich(text.slice(last, match.index));
+			if (fence || inlineCode) {
+				appendRich(full);
+			} else if (blockMath !== undefined) {
+				const span = document.createElement("span");
+				span.className = "ocs-math-block";
+				frag.appendChild(span);
+				mathJobs.push({ el: span, src: `$$\n${blockMath}\n$$`, block: true });
+			} else if (inlineMath !== undefined && isPlausibleInlineMath(text, match.index, inlineMath)) {
+				const span = document.createElement("span");
+				span.className = "ocs-math-inline";
+				frag.appendChild(span);
+				mathJobs.push({ el: span, src: `$${inlineMath}$`, block: false });
+			} else {
+				appendRich(full);
+			}
+			last = match.index + full.length;
+		}
+		if (last < text.length) appendRich(text.slice(last));
+		container.appendChild(frag);
+		for (const job of mathJobs) {
+			MarkdownRenderer.render(this.app, job.src, job.el, "", this).catch(() => {
+				job.el.textContent = job.src;
+			});
+		}
 	}
 
 	private renderTool(
