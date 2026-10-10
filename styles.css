@@ -832,6 +832,18 @@ button.ocs-picker-btn:active {
 	color: var(--text-normal);
 }
 
+button.ocs-picker-btn,
+button.ocs-picker-btn:hover,
+button.ocs-picker-btn:focus,
+button.ocs-picker-btn:focus-visible,
+button.ocs-picker-btn:active {
+	border: none !important;
+	background: transparent !important;
+	background-color: transparent !important;
+	box-shadow: none !important;
+	outline: none !important;
+}
+
 .ocs-picker-label {
 	overflow: hidden;
 	text-overflow: ellipsis;
