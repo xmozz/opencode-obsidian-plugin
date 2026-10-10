@@ -37,7 +37,11 @@ interface TabState {
 	attention: boolean;
 	messages: ChatMessage[];
 	loaded: boolean;
-	usageText: string;
+	usageCost: number;
+	usageInput: number;
+	usageOutput: number;
+	usageCache: number;
+	usageHaveData: boolean;
 	/** Vault-relative path of the auto/current note context (Grimoire-style). */
 	activeNote: string | null;
 	/** Manually attached vault-relative context files. */
@@ -53,6 +57,7 @@ interface DiscoveredModel {
 	id: string;
 	name: string;
 	variants: string[];
+	limit: number | null;
 }
 
 let tabCounter = 0;
@@ -239,8 +244,7 @@ export class OpenCodeChatView extends ItemView {
 		const actions = el("div", "ocs-header-actions");
 		nav.appendChild(actions);
 		this.usageBadge = el("span", "ocs-usage-badge", "");
-		this.usageBadge.title = "Session cost / tokens";
-		actions.appendChild(this.usageBadge);
+		this.usageBadge.title = "Tokens · cost · context window";
 		const histBtn = el("button", "ocs-icon-btn", "☰");
 		histBtn.title = "Sessions (/session) — shared with CLI";
 		histBtn.onclick = () => this.toggleHistory();
@@ -467,7 +471,11 @@ export class OpenCodeChatView extends ItemView {
 				attention: false,
 				messages: [],
 				loaded: false,
-				usageText: "",
+				usageCost: 0,
+				usageInput: 0,
+				usageOutput: 0,
+				usageCache: 0,
+				usageHaveData: false,
 				activeNote: o.activeNote ?? null,
 				contextFiles: Array.isArray(o.contextFiles) ? o.contextFiles : [],
 				images: [],
@@ -530,7 +538,11 @@ export class OpenCodeChatView extends ItemView {
 			attention: false,
 			messages: [],
 			loaded: false,
-			usageText: "",
+			usageCost: 0,
+			usageInput: 0,
+			usageOutput: 0,
+			usageCache: 0,
+			usageHaveData: false,
 			activeNote: null,
 			contextFiles: [],
 			images: [],
@@ -781,8 +793,32 @@ export class OpenCodeChatView extends ItemView {
 		this.renderChips();
 	}
 
-	private renderChips(): void {
-		this.chipsRow.empty();
+	/** Tokens · cost · context-window %, top-right inside the composer box. */
+	private updateUsageBadge(): void {
+		const tab = this.activeTab();
+		if (!tab || !tab.usageHaveData) {
+			this.usageBadge.textContent = "";
+			return;
+		}
+		const total = tab.usageInput + tab.usageOutput + tab.usageCache;
+		const parts = [`${fmtTokens(total)} tok`, `$${fmtCost(tab.usageCost)}`];
+		const limit = this.contextLimit();
+		if (limit && limit > 0) {
+			parts.push(`${Math.min(999, Math.round((total / limit) * 100))}% ctx`);
+		}
+		this.usageBadge.textContent = parts.join(" · ");
+		this.usageBadge.title = `Tokens: ${total}\nCost: $${tab.usageCost}\nContext: ${limit ? `${total} / ${limit}` : "unknown limit"}`;
+	}
+
+	/** Context window size of the selected model, if the catalog reports it. */
+	private contextLimit(): number | null {
+		const ref = this.selectedModelRef();
+		if (!ref) return null;
+		const m = this.models.find((x) => x.providerID === ref.providerID && x.id === ref.id);
+		return m?.limit ?? null;
+	}
+
+	private renderChips(): void {		this.chipsRow.empty();
 		const tab = this.activeTab();
 		if (tab?.activeNote) {
 			this.chipsRow.appendChild(this.chip(tab.activeNote, true));
@@ -808,6 +844,9 @@ export class OpenCodeChatView extends ItemView {
 		add.title = "Attach vault file";
 		add.onclick = () => this.openAttachPicker();
 		this.chipsRow.appendChild(add);
+		// Usage text lives top-right inside the composer box (plain text).
+		this.chipsRow.appendChild(this.usageBadge);
+		this.updateUsageBadge();
 	}
 
 	private chip(path: string, isActiveNote: boolean): HTMLElement {
@@ -877,7 +916,7 @@ export class OpenCodeChatView extends ItemView {
 		const live = this.liveAssistant.get(tab.sessionId);
 		if (live && !live.parentElement) list.appendChild(live);
 		list.scrollTop = list.scrollHeight;
-		this.usageBadge.textContent = tab.usageText;
+		this.updateUsageBadge();
 	}
 
 	private renderMessage(m: ChatMessage): HTMLElement {
@@ -1041,6 +1080,23 @@ export class OpenCodeChatView extends ItemView {
 		} catch {
 			tab.messages = [];
 			tab.loaded = true;
+		}
+		try {
+			const info = (await client.session.get({
+				sessionID: tab.sessionId,
+			} as never)) as unknown as {
+				cost?: number;
+				tokens?: { input?: number; output?: number; cache?: { read?: number } };
+			};
+			if (typeof info.cost === "number" || info.tokens) {
+				tab.usageCost = info.cost ?? 0;
+				tab.usageInput = info.tokens?.input ?? 0;
+				tab.usageOutput = info.tokens?.output ?? 0;
+				tab.usageCache = info.tokens?.cache?.read ?? 0;
+				tab.usageHaveData = true;
+			}
+		} catch {
+			/* usage is best-effort; messages matter more */
 		}
 		if (this.plugin.settings.latexHint) {
 			void ensureMathInstruction(client, tab.sessionId);
@@ -1428,6 +1484,7 @@ export class OpenCodeChatView extends ItemView {
 			]);
 			this.models = toArray(models).map((m) => {
 				const r = m as Record<string, unknown>;
+				const limit = r.limit as { context?: unknown } | undefined;
 				return {
 					providerID: String(r.providerID ?? r.provider ?? ""),
 					id: String(r.id ?? ""),
@@ -1435,6 +1492,7 @@ export class OpenCodeChatView extends ItemView {
 					variants: Array.isArray(r.variants)
 						? (r.variants as { id?: string }[]).map((v) => String(v.id ?? v))
 						: [],
+					limit: typeof limit?.context === "number" ? limit.context : null,
 				};
 			});
 			this.agents = toArray(agents).map((a) => {
@@ -1906,16 +1964,16 @@ export class OpenCodeChatView extends ItemView {
 			}
 			case "session.usage.updated": {
 				if (tab) {
-					const tokens = data.tokens as { input?: number; output?: number } | undefined;
+					const tokens = data.tokens as
+						| { input?: number; output?: number; cache?: { read?: number } }
+						| undefined;
 					const cost = data.cost as { value?: number } | number | undefined;
-					const costNum =
-						typeof cost === "number" ? cost : (cost?.value ?? 0);
-					tab.usageText =
-						`$${Number(costNum).toFixed(4)}` +
-						(tokens ? ` · ${(tokens.input ?? 0) + (tokens.output ?? 0)} tok` : "");
-					if (tab.tabId === this.activeTabId) {
-						this.usageBadge.textContent = tab.usageText;
-					}
+					tab.usageCost = typeof cost === "number" ? cost : (cost?.value ?? 0);
+					tab.usageInput = tokens?.input ?? 0;
+					tab.usageOutput = tokens?.output ?? 0;
+					tab.usageCache = tokens?.cache?.read ?? 0;
+					tab.usageHaveData = true;
+					if (tab.tabId === this.activeTabId) this.updateUsageBadge();
 				}
 				break;
 			}
@@ -2066,6 +2124,16 @@ function summarizeInput(input: Record<string, unknown>): string {
 	const first = Object.values(input)[0];
 	if (typeof first === "string") return first.slice(0, 60);
 	return "";
+}
+
+function fmtTokens(n: number): string {
+	if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+	if (n >= 1000) return `${(n / 1000).toFixed(1)}k`;
+	return String(n);
+}
+
+function fmtCost(c: number): string {
+	return c.toFixed(4).replace(/0+$/, "").replace(/\.$/, ".0");
 }
 
 function cssEsc(s: string): string {
