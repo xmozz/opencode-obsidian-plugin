@@ -1,0 +1,27 @@
+{
+	"name": "opencode-obsidian",
+	"version": "0.1.0",
+	"description": "Obsidian plugin: Grimoire-style OpenCode chat with native shared sessions.",
+	"main": "main.js",
+	"type": "commonjs",
+	"scripts": {
+		"dev": "node esbuild.config.mjs",
+		"build": "node esbuild.config.mjs production",
+		"typecheck": "tsc --noEmit"
+	},
+	"keywords": [
+		"obsidian",
+		"obsidian-plugin",
+		"opencode"
+	],
+	"license": "MIT",
+	"devDependencies": {
+		"@types/node": "^22.0.0",
+		"esbuild": "^0.24.0",
+		"obsidian": "^1.13.1",
+		"typescript": "^5.6.0"
+	},
+	"dependencies": {
+		"@opencode/client": "2.0.26"
+	}
+}

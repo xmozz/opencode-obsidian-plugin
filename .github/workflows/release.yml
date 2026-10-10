@@ -1,0 +1,74 @@
+name: Release
+
+# BRAT installs Obsidian plugins from GitHub releases: it downloads
+# main.js, manifest.json and styles.css from the latest release.
+# To ship a version: bump the version in package.json + manifest.json
+# (+ versions.json), merge to main, then `git tag 0.1.0 && git push origin 0.1.0`.
+# This workflow builds the bundle and creates the release automatically.
+on:
+  push:
+    tags:
+      - "[0-9]*.[0-9]*.[0-9]*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Build release bundle
+        run: npm run build
+
+      - name: Verify tag matches versions
+        run: |
+          node -e '
+          const fs = require("fs");
+          const tag = process.env.GITHUB_REF_NAME;
+          const pkg = JSON.parse(fs.readFileSync("package.json", "utf8"));
+          const manifest = JSON.parse(fs.readFileSync("manifest.json", "utf8"));
+          if (pkg.version !== tag || manifest.version !== tag) {
+            console.error(`Tag ${tag} must match package.json (${pkg.version}) and manifest.json (${manifest.version}).`);
+            process.exit(1);
+          }
+          const versions = JSON.parse(fs.readFileSync("versions.json", "utf8"));
+          if (!(tag in versions)) {
+            console.error(`Tag ${tag} is missing in versions.json. Add e.g. "${tag}": "<minAppVersion>".`);
+            process.exit(1);
+          }
+          '
+
+      - name: Verify release assets
+        run: |
+          test -s main.js
+          test -s manifest.json
+          test -s styles.css
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          gh release create "${tag}" \
+            main.js manifest.json styles.css \
+            --title "OpenCode ${tag}" \
+            --target "${GITHUB_SHA}" \
+            --notes "OpenCode for Obsidian ${tag}. Install via BRAT or copy main.js, manifest.json and styles.css into <vault>/.obsidian/plugins/opencode-obsidian/." \
+            --verify-tag
