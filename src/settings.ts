@@ -7,6 +7,7 @@ export interface PluginSettings {
 	autoApprove: boolean;
 	maxTabs: number;
 	fontSize: number;
+	latexHint: boolean;
 	sendWithButtonOnly: boolean;
 	refreshOnOpen: boolean;
 }
@@ -20,6 +21,7 @@ export const DEFAULT_SETTINGS: PluginSettings = {
 	autoApprove: false,
 	maxTabs: 10,
 	fontSize: 13,
+	latexHint: true,
 	sendWithButtonOnly: false,
 	refreshOnOpen: true,
 };

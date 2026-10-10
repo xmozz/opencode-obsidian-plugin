@@ -14,6 +14,7 @@ import {
 	switchAgent,
 	runSessionCommand,
 	replyPermission,
+	ensureMathInstruction,
 	parseUnifiedDiff,
 	countDiff,
 	type VaultSession,
@@ -72,12 +73,12 @@ function escapeHtml(s: string): string {
 		.replace(/>/g, "&gt;");
 }
 
-/** Avoids turning prices ("costs $5 and $10") into math. */
-function isPlausibleInlineMath(text: string, dollarIndex: number, content: string): boolean {
-	if (!content || /^\s|\s$/.test(content)) return false;
-	if (dollarIndex > 0 && /[0-9A-Za-z]/.test(text[dollarIndex - 1] ?? "")) return false;
-	return true;
-}
+import {
+	isPlausibleInlineMath,
+	looksLikeLatex,
+	isLatexFence,
+	stripFence,
+} from "./math";
 
 /** Minimal markdown-ish rendering: code blocks, inline code, bold, links, line breaks. */
 function renderRich(text: string): string {
@@ -536,12 +537,12 @@ export class OpenCodeChatView extends ItemView {
 		for (const m of tab.messages) list.appendChild(this.renderMessage(m));
 		for (const q of this.queuedFor(tab.tabId)) {
 			const wrap = el("div", "ocs-msg ocs-user ocs-queued");
-			wrap.appendChild(el("div", "ocs-msg-meta", `⏳ queued — will send once opencode is ready · ${fmtTime(q.ts)}`));
 			const bubble = el("div", "ocs-bubble");
 			const body = el("div", "ocs-msg-body");
 			body.innerHTML = renderRich(q.text);
 			bubble.appendChild(body);
 			wrap.appendChild(bubble);
+			wrap.appendChild(el("div", "ocs-msg-meta", `⏳ queued — will send once opencode is ready · ${fmtTime(q.ts)}`));
 			list.appendChild(wrap);
 		}
 		// live (streaming) containers are appended by the event loop
@@ -569,9 +570,7 @@ export class OpenCodeChatView extends ItemView {
 			};
 			meta.appendChild(copy);
 		}
-		wrap.appendChild(meta);
 		const bubble = el("div", "ocs-bubble");
-		wrap.appendChild(bubble);
 		if (m.reasoning.length > 0) {
 			const det = document.createElement("details");
 			det.className = "ocs-thinking";
@@ -593,6 +592,8 @@ export class OpenCodeChatView extends ItemView {
 			this.renderBodyText(body, m.text);
 			bubble.appendChild(body);
 		}
+		wrap.appendChild(bubble);
+		wrap.appendChild(meta);
 		return wrap;
 	}
 
@@ -616,8 +617,30 @@ export class OpenCodeChatView extends ItemView {
 		while ((match = token.exec(text)) !== null) {
 			const [full, fence, inlineCode, blockMath, inlineMath] = match;
 			if (match.index > last) appendRich(text.slice(last, match.index));
-			if (fence || inlineCode) {
-				appendRich(full);
+			if (fence) {
+				const inner = stripFence(full);
+				if (isLatexFence(full) || looksLikeLatex(inner)) {
+					const span = document.createElement("span");
+					span.className = "ocs-math-block";
+					frag.appendChild(span);
+					mathJobs.push({
+						el: span,
+						src: /\$\$/.test(inner) ? inner : `$$\n${inner}\n$$`,
+						block: true,
+					});
+				} else {
+					appendRich(full);
+				}
+			} else if (inlineCode) {
+				const inner = full.slice(1, -1);
+				if (looksLikeLatex(inner)) {
+					const span = document.createElement("span");
+					span.className = "ocs-math-inline";
+					frag.appendChild(span);
+					mathJobs.push({ el: span, src: `$${inner}$`, block: false });
+				} else {
+					appendRich(full);
+				}
 			} else if (blockMath !== undefined) {
 				const span = document.createElement("span");
 				span.className = "ocs-math-block";
@@ -742,6 +765,9 @@ export class OpenCodeChatView extends ItemView {
 		} catch {
 			tab.messages = [];
 			tab.loaded = true;
+		}
+		if (this.plugin.settings.latexHint) {
+			void ensureMathInstruction(client, tab.sessionId);
 		}
 		if (this.activeTabId === tab.tabId) this.renderContent();
 	}

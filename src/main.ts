@@ -216,6 +216,15 @@ class OpenCodeSettingTab extends PluginSettingTab {
 					}),
 			);
 		new Setting(containerEl)
+			.setName("LaTeX math hint")
+			.setDesc("Stores a per-session instruction so the model formats math as LaTeX instead of code blocks. Applies when a session is opened.")
+			.addToggle((t) =>
+				t.setValue(this.plugin.settings.latexHint).onChange(async (v) => {
+					this.plugin.settings.latexHint = v;
+					await this.plugin.saveSettings();
+				}),
+			);
+		new Setting(containerEl)
 			.setName("Max tabs")
 			.addSlider((s) =>
 				s.setLimits(1, 20, 1).setValue(this.plugin.settings.maxTabs).onChange(async (v) => {

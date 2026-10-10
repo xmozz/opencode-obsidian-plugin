@@ -388,3 +388,35 @@ export async function replyPermission(
 		reply,
 	} as unknown as Parameters<OpenCodeClient["permission"]["reply"]>[0]);
 }
+
+const MATH_INSTRUCTION_KEY = "opencode-sync-math";
+const MATH_INSTRUCTION_VALUE =
+	"Format all mathematics using LaTeX: inline $...$ for short formulas, display $$...$$ for multi-line derivations. Never wrap formulas or equations in code blocks or backticks.";
+
+/**
+ * Stores a LaTeX formatting hint as a native session instruction entry —
+ * no files, per session, honored by the model (verified). Idempotent.
+ */
+export async function ensureMathInstruction(
+	client: OpenCodeClient,
+	sessionID: string,
+): Promise<void> {
+	try {
+		const list = (await client.session.instructions.entry.list({
+			sessionID,
+		} as unknown as Parameters<
+			OpenCodeClient["session"]["instructions"]["entry"]["list"]
+		>[0])) as unknown as AnyRecord;
+		const arr: AnyRecord[] = Array.isArray(list) ? list : (list.data ?? []);
+		if (arr.some((e) => e?.key === MATH_INSTRUCTION_KEY)) return;
+		await client.session.instructions.entry.put({
+			sessionID,
+			key: MATH_INSTRUCTION_KEY,
+			value: MATH_INSTRUCTION_VALUE,
+		} as unknown as Parameters<
+			OpenCodeClient["session"]["instructions"]["entry"]["put"]
+		>[0]);
+	} catch {
+		/* older servers may lack the API — math still renders when output as LaTeX */
+	}
+}
