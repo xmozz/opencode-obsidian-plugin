@@ -115,6 +115,12 @@ export default class OpenCodePlugin extends Plugin {
 			const conn: Connection = await connectShared(
 				this.settings.opencodeBin,
 				this.settings.opencodeExtraEnv,
+				(line) => {
+					const view = this.chatView() as unknown as {
+						setStatus?: (s: string) => void;
+					} | null;
+					view?.setStatus?.(line);
+				},
 			);
 			this.client = conn.client;
 			this.endpointUrl = conn.endpointUrl;
@@ -156,7 +162,9 @@ class OpenCodeSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName("OpenCode binary")
-			.setDesc("Path or command used to ensure the shared background service.")
+			.setDesc(
+				"Command or absolute path used for the shared background service. On Windows, npm shims (opencode.cmd/.ps1) cannot be spawned directly — point this at opencode.exe if auto-detection fails.",
+			)
 			.addText((t) =>
 				t.setValue(this.plugin.settings.opencodeBin).onChange(async (v) => {
 					this.plugin.settings.opencodeBin = v.trim() || "opencode";
