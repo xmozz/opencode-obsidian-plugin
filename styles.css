@@ -9,6 +9,16 @@
 	background: var(--background-primary);
 	color: var(--text-normal);
 	font-size: var(--ocs-fs, 13px);
+	user-select: text;
+	-webkit-user-select: text;
+	cursor: auto;
+}
+
+.ocs-container input,
+.ocs-container textarea,
+.ocs-container select {
+	user-select: text;
+	-webkit-user-select: text;
 }
 
 .ocs-chat-window-shell {
@@ -188,6 +198,29 @@
 	font-size: calc(var(--ocs-fs, 13px) - 3px);
 	color: var(--text-faint);
 	margin-bottom: 4px;
+	display: flex;
+	align-items: center;
+	gap: 8px;
+}
+
+.ocs-copy-btn {
+	border: none;
+	background: transparent;
+	color: var(--text-faint);
+	cursor: pointer;
+	border-radius: 4px;
+	padding: 0 4px;
+	font-size: calc(var(--ocs-fs, 13px) - 2px);
+	opacity: 0;
+}
+
+.ocs-msg:hover .ocs-copy-btn {
+	opacity: 1;
+}
+
+.ocs-copy-btn:hover {
+	background: var(--background-modifier-hover);
+	color: var(--text-normal);
 }
 
 .ocs-msg-body {

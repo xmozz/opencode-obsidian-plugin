@@ -530,7 +530,22 @@ export class OpenCodeChatView extends ItemView {
 
 	private renderMessage(m: ChatMessage): HTMLElement {
 		const wrap = el("div", `ocs-msg ocs-${m.role}`);
-		const meta = el("div", "ocs-msg-meta", fmtTime(m.timestamp));
+		const meta = el("div", "ocs-msg-meta");
+		meta.appendChild(el("span", "", fmtTime(m.timestamp)));
+		if (m.text) {
+			const copy = el("button", "ocs-copy-btn", "⧉");
+			copy.title = "Copy message text";
+			copy.onclick = async (e) => {
+				e.stopPropagation();
+				try {
+					await navigator.clipboard.writeText(m.text);
+					new Notice("Message copied");
+				} catch {
+					new Notice("Could not access clipboard");
+				}
+			};
+			meta.appendChild(copy);
+		}
 		wrap.appendChild(meta);
 		if (m.reasoning.length > 0) {
 			const det = document.createElement("details");
