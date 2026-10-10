@@ -33,6 +33,8 @@ export interface ChatMessage {
 	reasoning: string[];
 	tools: ChatPart[];
 	timestamp: number;
+	/** Turn duration in seconds (assistant only, when the server reports it). */
+	durationSeconds?: number;
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -262,6 +264,8 @@ function parseMessage(m: AnyRecord): ChatMessage[] {
 		}
 		const text = texts.join("").trim();
 		if (!text && reasoning.length === 0 && tools.length === 0) return [];
+		const created = Number(m.time?.created ?? ts);
+		const completed = Number(m.time?.completed ?? NaN);
 		return [
 			{
 				id: String(m.id ?? `asst-${ts}`),
@@ -270,6 +274,9 @@ function parseMessage(m: AnyRecord): ChatMessage[] {
 				reasoning,
 				tools,
 				timestamp: ts,
+				...(Number.isFinite(completed) && completed >= created
+					? { durationSeconds: Math.max(0, (completed - created) / 1000) }
+					: {}),
 			},
 		];
 	}

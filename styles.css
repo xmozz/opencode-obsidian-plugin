@@ -270,18 +270,34 @@
 	opacity: 1;
 }
 
-.ocs-copy-btn:hover,
-.ocs-copy-btn:focus {
-	background: transparent;
-	border: none;
-	box-shadow: none;
+.ocs-msg:hover .ocs-copy-btn:hover {
 	color: var(--text-normal);
-	opacity: 1;
 }
 
-/* Obsidian's own code-block copy buttons: no box either */
-.ocs-msg-body .copy-code-button {
+.ocs-msg-meta .ocs-copy-btn,
+.ocs-msg-meta .ocs-copy-btn:hover,
+.ocs-msg-meta .ocs-copy-btn:focus,
+.ocs-msg-meta .ocs-copy-btn:focus-visible,
+.ocs-msg-meta .ocs-copy-btn:active,
+button.ocs-copy-btn,
+button.ocs-copy-btn:hover,
+button.ocs-copy-btn:focus,
+button.ocs-copy-btn:active {
 	background: transparent !important;
+	background-color: transparent !important;
+	border: none !important;
+	border-radius: 4px;
+	box-shadow: none !important;
+	outline: none !important;
+}
+
+/* Obsidian's own code-block copy buttons: symbol only as well */
+.ocs-msg-body .copy-code-button,
+.ocs-msg-body .copy-code-button:hover,
+.ocs-msg-body .copy-code-button:focus,
+.ocs-msg-body .copy-code-button:active {
+	background: transparent !important;
+	background-color: transparent !important;
 	border: none !important;
 	box-shadow: none !important;
 }

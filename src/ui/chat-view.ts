@@ -77,6 +77,20 @@ function fmtTime(ts: number): string {
 	}
 }
 
+/** Short human duration like Grimoire ("12s", "1m 24s", "2h 3m"). */
+function fmtDuration(seconds: number): string {
+	const s = Math.max(0, Math.round(seconds));
+	if (s < 60) return `${s}s`;
+	const m = Math.floor(s / 60);
+	if (m < 60) {
+		const rest = s % 60;
+		return rest > 0 ? `${m}m ${rest}s` : `${m}m`;
+	}
+	const h = Math.floor(m / 60);
+	const restM = m % 60;
+	return restM > 0 ? `${h}h ${restM}m` : `${h}h`;
+}
+
 function escapeHtml(s: string): string {
 	return s
 		.replace(/&/g, "&amp;")
@@ -842,7 +856,8 @@ export class OpenCodeChatView extends ItemView {
 	private renderMessage(m: ChatMessage): HTMLElement {
 		const wrap = el("div", `ocs-msg ocs-${m.role}`);
 		const meta = el("div", "ocs-msg-meta");
-		meta.appendChild(el("span", "", fmtTime(m.timestamp)));
+		const stamp = fmtTime(m.timestamp) + (m.durationSeconds !== undefined ? ` · ${fmtDuration(m.durationSeconds)}` : "");
+		meta.appendChild(el("span", "", stamp));
 		if (m.text) {
 			const copy = el("button", "ocs-copy-btn", "⧉");
 			copy.title = "Copy message text";
