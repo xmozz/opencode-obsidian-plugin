@@ -885,6 +885,10 @@ button.ocs-picker-btn:active {
 	min-width: 0;
 }
 
+.ocs-toolbar-left > :first-child {
+	margin-right: 6px;
+}
+
 .ocs-toolbar-right {
 	display: flex;
 	align-items: center;
