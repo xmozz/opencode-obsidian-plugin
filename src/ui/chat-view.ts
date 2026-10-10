@@ -286,7 +286,7 @@ export class OpenCodeChatView extends ItemView {
 		this.agentBtn.onclick = (e) => this.openAgentPicker(e as MouseEvent);
 
 		this.effortBtn = el("button", "ocs-icon-btn ocs-effort-btn", "");
-		this.effortBtn.onclick = () => this.cycleEffort();
+		this.effortBtn.onclick = (e) => this.openEffortMenu(e as MouseEvent);
 
 		this.attachBtn = el("button", "ocs-icon-btn", "");
 		setIconOrText(this.attachBtn, "paperclip", "📎", "Attach file (system explorer)");
@@ -1209,13 +1209,6 @@ export class OpenCodeChatView extends ItemView {
 		}
 	}
 
-	/** Cycle to the next reasoning effort tier. */
-	private cycleEffort(): void {
-		const opts = this.variantOptions.length > 0 ? this.variantOptions : ["default"];
-		const cur = opts.indexOf(this.plugin.settings.variant);
-		void this.onVariantChanged(opts[(cur + 1) % opts.length]);
-	}
-
 	private async onAgentChanged(value?: string): Promise<void> {
 		const tab = this.activeTab();
 		const client = this.plugin.client;
@@ -1571,7 +1564,6 @@ export class OpenCodeChatView extends ItemView {
 			: "Model";
 		this.modelBtn.empty();
 		this.modelBtn.appendChild(el("span", "ocs-picker-label", label));
-		this.modelBtn.appendChild(el("span", "ocs-picker-chev", "▾"));
 		this.modelBtn.title = `Model: ${this.plugin.settings.model || "none"} (click to change)`;
 		this.renderVariantOptions();
 	}
@@ -1591,8 +1583,24 @@ export class OpenCodeChatView extends ItemView {
 
 	private renderEffortBtn(): void {
 		const v = this.plugin.settings.variant || "default";
-		this.effortBtn.textContent = v === "default" ? "Auto" : v;
-		this.effortBtn.title = `Reasoning effort: ${v} (click to cycle)`;
+		this.effortBtn.empty();
+		this.effortBtn.appendChild(el("span", "ocs-picker-label", v === "default" ? "Auto" : v));
+		this.effortBtn.appendChild(el("span", "ocs-picker-chev", "▾"));
+		this.effortBtn.title = `Reasoning effort: ${v} (click to change)`;
+	}
+
+	private openEffortMenu(e: MouseEvent): void {
+		const menu = new Menu();
+		const opts = this.variantOptions.length > 0 ? this.variantOptions : ["default"];
+		for (const v of opts) {
+			menu.addItem((i) =>
+				i
+					.setTitle(v === "default" ? "Auto" : v)
+					.setChecked(v === this.plugin.settings.variant)
+					.onClick(() => void this.onVariantChanged(v)),
+			);
+		}
+		menu.showAtMouseEvent(e);
 	}
 
 	private renderAgentBtn(): void {
