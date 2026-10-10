@@ -265,6 +265,7 @@ export class OpenCodeChatView extends ItemView {
 
 		// tab content
 		this.content = el("div", "ocs-tab-content-container");
+		this.content.addEventListener("click", (e) => this.onLinkClick(e as MouseEvent));
 		shell.appendChild(this.content);
 
 		// history panel (popover)
@@ -406,8 +407,34 @@ export class OpenCodeChatView extends ItemView {
 		this.renderApproveBtn();
 	}
 
-	private renderSendBtn(): void {
-		const streaming = this.activeTab()?.streaming ?? false;
+	/** Central link handling: vault links open in the editor, externals in the browser. */
+	private onLinkClick(e: MouseEvent): void {
+		const target = e.target as HTMLElement | null;
+		const anchor = target?.closest?.("a") as HTMLAnchorElement | null;
+		if (!anchor) return;
+		const href =
+			anchor.getAttribute("data-href") ?? anchor.getAttribute("href") ?? "";
+		if (!href) return;
+		e.preventDefault();
+		e.stopPropagation();
+		if (/^(https?:|mailto:|obsidian:)/i.test(href)) {
+			window.open(href, "_blank", "noopener");
+			return;
+		}
+		if (href.startsWith("#")) {
+			const dest = this.root.querySelector(href);
+			if (dest) dest.scrollIntoView({ block: "nearest" });
+			return;
+		}
+		const dest = this.app.metadataCache.getFirstLinkpathDest(href, "");
+		if (!dest) {
+			new Notice(`File not found in vault: ${href}`);
+			return;
+		}
+		void this.app.workspace.openLinkText(href, "", false);
+	}
+
+	private renderSendBtn(): void {		const streaming = this.activeTab()?.streaming ?? false;
 		setIconOrText(
 			this.sendBtn,
 			streaming ? "square" : "arrow-up",
