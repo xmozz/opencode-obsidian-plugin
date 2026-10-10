@@ -957,7 +957,13 @@ export class OpenCodeChatView extends ItemView {
 		}
 		if (m.text) {
 			const body = el("div", "ocs-msg-body");
-			this.renderBodyText(body, m.text);
+			if (m.role === "user") {
+				// Plain text: exactly the line breaks the user typed, no
+				// paragraph gaps from Markdown processing.
+				body.textContent = m.text;
+			} else {
+				this.renderBodyText(body, m.text);
+			}
 			bubble.appendChild(body);
 		}
 		wrap.appendChild(bubble);
