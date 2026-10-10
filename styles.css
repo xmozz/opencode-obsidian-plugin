@@ -65,7 +65,7 @@
 	align-items: center;
 	gap: 6px;
 	padding: 4px 10px;
-	border-radius: 0;
+	border-radius: 6px;
 	border: 1px solid transparent;
 	background: transparent;
 	color: var(--text-muted);
@@ -80,7 +80,7 @@
 
 .ocs-tab-badge.ocs-active {
 	background: var(--background-modifier-hover);
-	border-color: var(--background-modifier-border);
+	border-color: var(--text-accent);
 	color: var(--text-normal);
 }
 
