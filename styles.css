@@ -746,6 +746,11 @@ button.ocs-copy-btn:active {
 	display: block;
 }
 
+.ocs-composer.ocs-drop {
+	border-color: var(--text-accent);
+	box-shadow: 0 0 0 1px var(--text-accent);
+}
+
 .ocs-chip-add {
 	border: 1px dashed var(--background-modifier-border);
 	background: transparent;

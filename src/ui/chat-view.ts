@@ -17,6 +17,9 @@ import {
 	ensureMathInstruction,
 	appendCurrentNote,
 	appendContextFiles,
+	readExternalTextFile,
+	appendExternalFile,
+	isAbsolutePath,
 	parseUnifiedDiff,
 	countDiff,
 	type VaultSession,
@@ -356,27 +359,22 @@ export class OpenCodeChatView extends ItemView {
 				f.type.startsWith("image/"),
 			);
 			if (files.length === 0) return;
-			const tab = this.activeTab();
-			if (!tab) return;
-			for (const file of files.slice(0, 5)) {
-				if (file.size > 10 * 1024 * 1024) {
-					new Notice(`Image too large (max 10 MB): ${file.name || "pasted image"}`);
-					continue;
-				}
-				const reader = new FileReader();
-				reader.onload = () => {
-					const dataUrl = String(reader.result ?? "");
-					if (dataUrl.startsWith("data:image")) {
-						tab.images.push({
-							id: `img-${Date.now()}-${Math.random().toString(36).slice(2)}`,
-							name: file.name || "pasted image",
-							dataUrl,
-						});
-						this.renderChips();
-					}
-				};
-				reader.readAsDataURL(file);
-			}
+			this.attachImageFiles(files);
+		};
+		composer.ondragover = (e) => {
+			e.preventDefault();
+			composer.classList.add("ocs-drop");
+		};
+		composer.ondragleave = () => composer.classList.remove("ocs-drop");
+		composer.ondrop = (e) => {
+			e.preventDefault();
+			composer.classList.remove("ocs-drop");
+			const files = Array.from(e.dataTransfer?.files ?? []);
+			if (files.length === 0) return;
+			const images = files.filter((f) => f.type.startsWith("image/"));
+			const rest = files.filter((f) => !f.type.startsWith("image/"));
+			if (images.length > 0) this.attachImageFiles(images);
+			if (rest.length > 0) this.addPickedFiles(rest);
 		};
 		composer.appendChild(this.composerText);
 		this.sendBtn = el("button", "ocs-send-btn", "");
@@ -716,35 +714,64 @@ export class OpenCodeChatView extends ItemView {
 
 	/** System file explorer — any file, inside or outside the vault. */
 	private openSystemExplorer(): void {
-		const tab = this.activeTab();
-		if (!tab) return;
 		const input = document.createElement("input");
 		input.type = "file";
 		input.multiple = true;
 		input.onchange = () => {
-			const files = Array.from(input.files ?? []);
-			const vaultDir = this.plugin
-				.vaultDir()
-				.replace(/\\/g, "/")
-				.replace(/\/+$/, "")
-				.toLowerCase();
-			for (const f of files) {
-				const abs = ((f as unknown as { path?: string }).path ?? "").replace(/\\/g, "/");
-				let ref = f.name;
-				if (abs && vaultDir && abs.toLowerCase().startsWith(`${vaultDir}/`)) {
-					ref = abs.slice(vaultDir.length + 1);
-				} else if (abs) {
-					ref = abs;
-				}
-				if (!tab.contextFiles.includes(ref) && tab.activeNote !== ref) {
-					tab.contextFiles.push(ref);
-				}
-			}
-			tab.autoAttached = false;
-			this.renderChips();
-			this.persistTabs();
+			this.addPickedFiles(Array.from(input.files ?? []));
 		};
 		input.click();
+	}
+
+	/** Shared sink for explorer-picked and dropped files. */
+	private addPickedFiles(files: File[]): void {
+		const tab = this.activeTab();
+		if (!tab || files.length === 0) return;
+		const vaultDir = this.plugin
+			.vaultDir()
+			.replace(/\\/g, "/")
+			.replace(/\/+$/, "")
+			.toLowerCase();
+		for (const f of files) {
+			const abs = ((f as unknown as { path?: string }).path ?? "").replace(/\\/g, "/");
+			let ref = f.name;
+			if (abs && vaultDir && abs.toLowerCase().startsWith(`${vaultDir}/`)) {
+				ref = abs.slice(vaultDir.length + 1);
+			} else if (abs) {
+				ref = abs;
+			}
+			if (!tab.contextFiles.includes(ref) && tab.activeNote !== ref) {
+				tab.contextFiles.push(ref);
+			}
+		}
+		tab.autoAttached = false;
+		this.renderChips();
+		this.persistTabs();
+	}
+
+	/** Shared sink for pasted and dropped images. */
+	private attachImageFiles(files: File[]): void {
+		const tab = this.activeTab();
+		if (!tab) return;
+		for (const file of files.slice(0, 5)) {
+			if (file.size > 10 * 1024 * 1024) {
+				new Notice(`Image too large (max 10 MB): ${file.name || "image"}`);
+				continue;
+			}
+			const reader = new FileReader();
+			reader.onload = () => {
+				const dataUrl = String(reader.result ?? "");
+				if (dataUrl.startsWith("data:image")) {
+					tab.images.push({
+						id: `img-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+						name: file.name || "image",
+						dataUrl,
+					});
+					this.renderChips();
+				}
+			};
+			reader.readAsDataURL(file);
+		}
 	}
 
 	private removeImage(id: string): void {
@@ -1194,10 +1221,16 @@ export class OpenCodeChatView extends ItemView {
 		this.renderTabs();
 		this.renderContent();
 		// Active note + attached files, Grimoire-style XML suffix (server-side only).
+		// Vault files travel as paths; external files are inlined so the
+		// agent can always open them (paths alone often fail to resolve).
 		let text = raw;
 		if (tab.activeNote) text = appendCurrentNote(text, tab.activeNote);
 		const extra = tab.contextFiles.filter((f) => f !== tab.activeNote);
-		if (extra.length > 0) text = appendContextFiles(text, extra);
+		const vaultRefs = extra.filter((f) => !isAbsolutePath(f));
+		if (vaultRefs.length > 0) text = appendContextFiles(text, vaultRefs);
+		for (const abs of extra.filter((f) => isAbsolutePath(f))) {
+			text = appendExternalFile(text, readExternalTextFile(abs));
+		}
 		const files = tab.images.map((i) => ({ uri: i.dataUrl }));
 		try {
 			await sendPrompt(client, tab.sessionId, text, files);

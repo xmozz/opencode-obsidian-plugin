@@ -350,7 +350,7 @@ export function appendContextFiles(prompt: string, files: string[]): string {
 }
 
 const XML_CONTEXT_SUFFIX =
-	/\n\n<(?:current_note|editor_selection|editor_cursor|context_files|excluded_folders|canvas_selection|browser_selection|vault_search|project_workspace)[\s>][\s\S]*$/;
+	/\n\n<(?:current_note|editor_selection|editor_cursor|context_files?|excluded_folders|canvas_selection|browser_selection|vault_search|project_workspace)[\s>][\s\S]*$/;
 
 /** Strips appended XML context blocks so history shows the clean user text. */
 export function stripXmlContext(text: string): string {
@@ -360,6 +360,60 @@ export function stripXmlContext(text: string): string {
 		if (stripped === out) return out;
 		out = stripped;
 	}
+}
+
+/** True for absolute filesystem paths (posix or Windows drive). */
+export function isAbsolutePath(p: string): boolean {
+	return /^([a-zA-Z]:[\\/]|\\\\|\/)/.test(p);
+}
+
+export interface ExternalFileContent {
+	path: string;
+	text?: string;
+	truncated?: boolean;
+	binary?: boolean;
+	error?: string;
+}
+
+const EXTERNAL_INLINE_LIMIT = 65536;
+
+/**
+ * Reads an out-of-vault file so its content can travel with the prompt.
+ * Vault files are passed by path (the agent reads them natively); external
+ * files are inlined because the agent may not resolve them otherwise.
+ */
+export function readExternalTextFile(absPath: string): ExternalFileContent {
+	try {
+		// eslint-disable-next-line @typescript-eslint/no-require-imports
+		const fs = require("node:fs") as typeof import("node:fs");
+		const stat = fs.statSync(absPath);
+		if (!stat.isFile()) return { path: absPath, error: "not a file" };
+		if (stat.size > 4 * 1024 * 1024) return { path: absPath, error: "file too large" };
+		const buffer = fs.readFileSync(absPath);
+		const probe = buffer.subarray(0, Math.min(buffer.length, 8192));
+		if (probe.includes(0)) return { path: absPath, binary: true };
+		let text = buffer.toString("utf8");
+		let truncated = false;
+		if (buffer.length > EXTERNAL_INLINE_LIMIT) {
+			text = buffer.subarray(0, EXTERNAL_INLINE_LIMIT).toString("utf8");
+			truncated = true;
+		}
+		return { path: absPath, text, ...(truncated ? { truncated: true } : {}) };
+	} catch (e) {
+		return { path: absPath, error: e instanceof Error ? e.message : String(e) };
+	}
+}
+
+/** Inline block for one external file (content or path fallback). */
+export function appendExternalFile(prompt: string, file: ExternalFileContent): string {
+	if (file.text !== undefined) {
+		const note = file.truncated ? "\n[... truncated, ask for specific parts if needed]" : "";
+		return `${prompt}\n\n<context_file path="${file.path}">\n${file.text}${note}\n</context_file>`;
+	 }
+	if (file.binary) {
+		return appendContextFiles(prompt, [`${file.path} (binary file, read it with an appropriate tool)`]);
+	}
+	return appendContextFiles(prompt, [file.path]);
 }
 
 export async function sendPrompt(
