@@ -533,9 +533,11 @@ export class OpenCodeChatView extends ItemView {
 		for (const q of this.queuedFor(tab.tabId)) {
 			const wrap = el("div", "ocs-msg ocs-user ocs-queued");
 			wrap.appendChild(el("div", "ocs-msg-meta", `⏳ queued — will send once opencode is ready · ${fmtTime(q.ts)}`));
+			const bubble = el("div", "ocs-bubble");
 			const body = el("div", "ocs-msg-body");
 			body.innerHTML = renderRich(q.text);
-			wrap.appendChild(body);
+			bubble.appendChild(body);
+			wrap.appendChild(bubble);
 			list.appendChild(wrap);
 		}
 		// live (streaming) containers are appended by the event loop
@@ -564,6 +566,8 @@ export class OpenCodeChatView extends ItemView {
 			meta.appendChild(copy);
 		}
 		wrap.appendChild(meta);
+		const bubble = el("div", "ocs-bubble");
+		wrap.appendChild(bubble);
 		if (m.reasoning.length > 0) {
 			const det = document.createElement("details");
 			det.className = "ocs-thinking";
@@ -575,15 +579,15 @@ export class OpenCodeChatView extends ItemView {
 				d.innerHTML = renderRich(r);
 				det.appendChild(d);
 			}
-			wrap.appendChild(det);
+			bubble.appendChild(det);
 		}
 		for (const t of m.tools) {
-			wrap.appendChild(this.renderTool(t.tool ?? "tool", t.input ?? {}, t.output, t.status ?? "completed"));
+			bubble.appendChild(this.renderTool(t.tool ?? "tool", t.input ?? {}, t.output, t.status ?? "completed"));
 		}
 		if (m.text) {
 			const body = el("div", "ocs-msg-body");
 			this.renderBodyText(body, m.text);
-			wrap.appendChild(body);
+			bubble.appendChild(body);
 		}
 		return wrap;
 	}
