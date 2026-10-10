@@ -31,3 +31,38 @@ export function stripFence(fence: string): string {
 	while (lines.length > 0 && /^```\s*$/.test(lines[lines.length - 1] ?? "")) lines.pop();
 	return lines.join("\n");
 }
+
+const TOKEN =
+	/(```[\s\S]*?```)|(`[^`\n]+`)|\$\$([\s\S]+?)\$\$|\$([^$\n]+?)\$/g;
+
+/**
+ * Rewrites code spans/blocks that actually contain LaTeX into $…$/$$…$$
+ * math, so a full Markdown renderer typesets them. Everything else
+ * (including plain-ASCII formulas and real code) is left untouched.
+ */
+export function convertLatexCodeToMath(text: string): string {
+	let out = "";
+	let last = 0;
+	let match: RegExpExecArray | null;
+	TOKEN.lastIndex = 0;
+	while ((match = TOKEN.exec(text)) !== null) {
+		const [full, fence, inlineCode] = match;
+		out += text.slice(last, match.index);
+		if (fence) {
+			const inner = stripFence(full);
+			if (isLatexFence(full) || looksLikeLatex(inner)) {
+				out += /\$\$/.test(inner) ? inner : `$$\n${inner}\n$$`;
+			} else {
+				out += full;
+			}
+		} else if (inlineCode) {
+			const inner = full.slice(1, -1);
+			out += looksLikeLatex(inner) ? `$${inner}$` : full;
+		} else {
+			out += full;
+		}
+		last = match.index + full.length;
+	}
+	out += text.slice(last);
+	return out;
+}

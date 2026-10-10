@@ -73,12 +73,7 @@ function escapeHtml(s: string): string {
 		.replace(/>/g, "&gt;");
 }
 
-import {
-	isPlausibleInlineMath,
-	looksLikeLatex,
-	isLatexFence,
-	stripFence,
-} from "./math";
+import { convertLatexCodeToMath } from "./math";
 
 /** Minimal markdown-ish rendering: code blocks, inline code, bold, links, line breaks. */
 function renderRich(text: string): string {
@@ -130,6 +125,10 @@ export class OpenCodeChatView extends ItemView {
 	private liveAssistant = new Map<string, HTMLElement>();
 	private liveReasoning = new Map<string, HTMLElement>();
 	private queued: Array<{ tabId: string; text: string; ts: number }> = [];
+	private slashMenu!: HTMLElement;
+	private slashOpen = false;
+	private slashItems: Array<{ name: string; hint: string; takesArg: boolean }> = [];
+	private slashIndex = 0;
 
 	constructor(leaf: WorkspaceLeaf, plugin: OpenCodePlugin) {
 		super(leaf);
@@ -258,17 +257,39 @@ export class OpenCodeChatView extends ItemView {
 			"Ask OpenCode…  (/session, /new, /compact, /fork, Enter to send)";
 		this.composerText.rows = 3;
 		this.composerText.onkeydown = (e) => {
+			if (this.slashOpen) {
+				if (e.key === "ArrowDown") {
+					e.preventDefault();
+					this.slashIndex = (this.slashIndex + 1) % Math.max(1, this.slashItems.length);
+					this.renderSlashMenu();
+					return;
+				}
+				if (e.key === "ArrowUp") {
+					e.preventDefault();
+					this.slashIndex =
+						(this.slashIndex - 1 + this.slashItems.length) % Math.max(1, this.slashItems.length);
+					this.renderSlashMenu();
+					return;
+				}
+				if (e.key === "Enter" || e.key === "Tab") {
+					e.preventDefault();
+					this.acceptSlash();
+					return;
+				}
+				if (e.key === "Escape") {
+					e.preventDefault();
+					this.closeSlashMenu();
+					return;
+				}
+			}
 			if (e.key === "Enter" && !e.shiftKey) {
 				if (this.plugin.settings.sendWithButtonOnly) return;
 				e.preventDefault();
 				void this.sendCurrent();
 			}
 		};
-		// "/" shortcut: open session picker like CLI /session
 		this.composerText.oninput = () => {
-			if (this.composerText.value.trim() === "/session") {
-				this.openHistory();
-			}
+			this.updateSlashMenu();
 		};
 		row2.appendChild(this.composerText);
 		this.sendBtn = el("button", "ocs-send-btn", "Send");
@@ -278,6 +299,10 @@ export class OpenCodeChatView extends ItemView {
 			else void this.sendCurrent();
 		};
 		row2.appendChild(this.sendBtn);
+
+		// Slash command menu (anchored above the composer)
+		this.slashMenu = el("div", "ocs-slash-menu ocs-hidden");
+		composer.appendChild(this.slashMenu);
 
 		const statusRow = el("div", "ocs-status-row");
 		composer.appendChild(statusRow);
@@ -598,71 +623,18 @@ export class OpenCodeChatView extends ItemView {
 	}
 
 	/**
-	 * Renders message text: code stays code, $…$/$$…$$ is typeset with
-	 * Obsidian's built-in MathJax, everything else goes through the
-	 * lightweight rich renderer.
+	 * Renders message text with Obsidian's full Markdown pipeline (callouts,
+	 * tables, task lists, highlights, quotes, math, …). Code spans/blocks
+	 * that actually contain LaTeX are converted to $ math first so they
+	 * typeset instead of showing as code.
 	 */
 	private renderBodyText(container: HTMLElement, text: string): void {
-		const token = /(```[\s\S]*?```)|(`[^`\n]+`)|\$\$([\s\S]+?)\$\$|\$([^$\n]+?)\$/g;
-		let last = 0;
-		let match: RegExpExecArray | null;
-		const frag = document.createDocumentFragment();
-		const mathJobs: Array<{ el: HTMLElement; src: string; block: boolean }> = [];
-		const appendRich = (segment: string): void => {
-			if (!segment) return;
-			const div = document.createElement("div");
-			div.innerHTML = renderRich(segment);
-			while (div.firstChild) frag.appendChild(div.firstChild);
-		};
-		while ((match = token.exec(text)) !== null) {
-			const [full, fence, inlineCode, blockMath, inlineMath] = match;
-			if (match.index > last) appendRich(text.slice(last, match.index));
-			if (fence) {
-				const inner = stripFence(full);
-				if (isLatexFence(full) || looksLikeLatex(inner)) {
-					const span = document.createElement("span");
-					span.className = "ocs-math-block";
-					frag.appendChild(span);
-					mathJobs.push({
-						el: span,
-						src: /\$\$/.test(inner) ? inner : `$$\n${inner}\n$$`,
-						block: true,
-					});
-				} else {
-					appendRich(full);
-				}
-			} else if (inlineCode) {
-				const inner = full.slice(1, -1);
-				if (looksLikeLatex(inner)) {
-					const span = document.createElement("span");
-					span.className = "ocs-math-inline";
-					frag.appendChild(span);
-					mathJobs.push({ el: span, src: `$${inner}$`, block: false });
-				} else {
-					appendRich(full);
-				}
-			} else if (blockMath !== undefined) {
-				const span = document.createElement("span");
-				span.className = "ocs-math-block";
-				frag.appendChild(span);
-				mathJobs.push({ el: span, src: `$$\n${blockMath}\n$$`, block: true });
-			} else if (inlineMath !== undefined && isPlausibleInlineMath(text, match.index, inlineMath)) {
-				const span = document.createElement("span");
-				span.className = "ocs-math-inline";
-				frag.appendChild(span);
-				mathJobs.push({ el: span, src: `$${inlineMath}$`, block: false });
-			} else {
-				appendRich(full);
-			}
-			last = match.index + full.length;
-		}
-		if (last < text.length) appendRich(text.slice(last));
-		container.appendChild(frag);
-		for (const job of mathJobs) {
-			MarkdownRenderer.render(this.app, job.src, job.el, "", this).catch(() => {
-				job.el.textContent = job.src;
-			});
-		}
+		const converted = convertLatexCodeToMath(text);
+		const div = document.createElement("div");
+		container.appendChild(div);
+		MarkdownRenderer.render(this.app, converted, div, "", this).catch(() => {
+			div.innerHTML = renderRich(text);
+		});
 	}
 
 	private renderTool(t: {
@@ -848,6 +820,7 @@ export class OpenCodeChatView extends ItemView {
 		const raw = this.composerText.value.trim();
 		if (!raw) return;
 		this.composerText.value = "";
+		this.closeSlashMenu();
 
 		const client = this.plugin.client;
 		if (!client || this.plugin.isConnecting()) {
@@ -888,12 +861,41 @@ export class OpenCodeChatView extends ItemView {
 			new Notice("Session not ready yet");
 			return;
 		}
-		// Local slash commands (mirrors CLI ergonomics)
-		if (await this.handleLocalCommand(raw, tab)) {
-			this.composerText.value = "";
+		// Slash commands never reach the agent raw: local, native, or rejected.
+		if (raw.startsWith("/")) {
+			if (await this.handleLocalCommand(raw, tab)) return;
+			const m = /^\/([\w-]+)\s*([\s\S]*)$/.exec(raw);
+			const cmdName = m?.[1] ?? raw.slice(1).split(/\s/, 1)[0];
+			if (cmdName === "compact") {
+				tab.streaming = true;
+				this.renderTabs();
+				try {
+					await client.session.compact({ sessionID: tab.sessionId } as never);
+				} catch (e) {
+					tab.streaming = false;
+					new Notice(`Compact failed: ${errMsg(e)}`);
+				}
+				return;
+			}
+			if (m && this.commands.some((c) => c.name === m[1])) {
+				tab.streaming = true;
+				this.renderTabs();
+				this.renderContent();
+				try {
+					await runSessionCommand(client, tab.sessionId, m[1], m[2] ?? "");
+				} catch (e) {
+					tab.streaming = false;
+					new Notice(`Command failed: ${errMsg(e)}`);
+					this.renderTabs();
+					this.renderContent();
+				}
+				return;
+			}
+			// Unknown command: do NOT send it to the agent.
+			new Notice(`Unknown command: /${cmdName} — type / to see available commands.`);
+			this.composerText.value = raw;
 			return;
 		}
-		this.composerText.value = "";
 		// optimistic user bubble
 		tab.messages.push({
 			id: `local-${Date.now()}`,
@@ -907,14 +909,7 @@ export class OpenCodeChatView extends ItemView {
 		this.renderTabs();
 		this.renderContent();
 		try {
-			if (raw.startsWith("/compact")) {
-				await client.session.compact({ sessionID: tab.sessionId } as never);
-			} else if (/^\/[\w-]+\b/.test(raw) && this.commands.some((c) => raw.startsWith(`/${c.name}`))) {
-				const m = /^\/([\w-]+)\s*([\s\S]*)$/.exec(raw);
-				if (m) await runSessionCommand(client, tab.sessionId, m[1], m[2] ?? "");
-			} else {
-				await sendPrompt(client, tab.sessionId, raw);
-			}
+			await sendPrompt(client, tab.sessionId, raw);
 		} catch (e) {
 			tab.streaming = false;
 			tab.messages.push({
@@ -930,9 +925,81 @@ export class OpenCodeChatView extends ItemView {
 		}
 	}
 
+	private localSlashCommands(): Array<{ name: string; hint: string; takesArg: boolean }> {
+		return [
+			{ name: "/session", hint: "Show shared sessions", takesArg: false },
+			{ name: "/new", hint: "New session tab", takesArg: false },
+			{ name: "/compact", hint: "Compact current session", takesArg: false },
+			{ name: "/fork", hint: "Fork current session", takesArg: false },
+			{ name: "/rename", hint: "Rename current session…", takesArg: true },
+			{ name: "/reload", hint: "Reload messages", takesArg: false },
+		];
+	}
+
+	private updateSlashMenu(): void {
+		const m = /^\/([A-Za-z0-9_-]*)$/.exec(this.composerText.value);
+		if (!m) {
+			this.closeSlashMenu();
+			return;
+		}
+		const prefix = m[1].toLowerCase();
+		const seen = new Set<string>();
+		const items: Array<{ name: string; hint: string; takesArg: boolean }> = [];
+		for (const c of this.localSlashCommands()) {
+			if (c.name.toLowerCase().startsWith(`/${prefix}`) && !seen.has(c.name)) {
+				seen.add(c.name);
+				items.push(c);
+			}
+		}
+		for (const c of this.commands) {
+			const name = `/${c.name}`;
+			if (name.toLowerCase().startsWith(`/${prefix}`) && !seen.has(name)) {
+				seen.add(name);
+				items.push({ name, hint: c.description || "opencode command", takesArg: true });
+			}
+		}
+		if (items.length === 0) {
+			this.closeSlashMenu();
+			return;
+		}
+		this.slashItems = items;
+		this.slashIndex = Math.min(this.slashIndex, items.length - 1);
+		this.renderSlashMenu();
+	}
+
+	private renderSlashMenu(): void {
+		this.slashMenu.empty();
+		this.slashItems.forEach((item, i) => {
+			const row = el("button", `ocs-slash-row${i === this.slashIndex ? " ocs-selected" : ""}`);
+			row.appendChild(el("span", "ocs-slash-name", item.name));
+			row.appendChild(el("span", "ocs-slash-hint", item.hint));
+			row.onmousedown = (e) => {
+				e.preventDefault();
+				this.slashIndex = i;
+				this.acceptSlash();
+			};
+			this.slashMenu.appendChild(row);
+		});
+		this.slashOpen = true;
+		this.slashMenu.classList.remove("ocs-hidden");
+	}
+
+	private acceptSlash(): void {
+		const item = this.slashItems[this.slashIndex];
+		this.closeSlashMenu();
+		if (!item) return;
+		this.composerText.value = item.takesArg ? `${item.name} ` : item.name;
+		this.composerText.focus();
+	}
+
+	private closeSlashMenu(): void {
+		this.slashOpen = false;
+		this.slashIndex = 0;
+		this.slashMenu?.classList.add("ocs-hidden");
+	}
+
 	/** Returns true if the command was handled locally. */
-	private async handleLocalCommand(raw: string, tab: TabState): Promise<boolean> {
-		const client = this.plugin.client;
+	private async handleLocalCommand(raw: string, tab: TabState): Promise<boolean> {		const client = this.plugin.client;
 		if (raw === "/session") {
 			this.openHistory();
 			return true;

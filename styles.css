@@ -653,6 +653,7 @@
 	display: flex;
 	flex-direction: column;
 	gap: 6px;
+	position: relative;
 }
 
 .ocs-composer-controls {
@@ -727,6 +728,62 @@
 	display: flex;
 	align-items: center;
 	gap: 8px;
+}
+
+/* ---- slash command menu ---- */
+.ocs-slash-menu {
+	position: absolute;
+	bottom: 100%;
+	left: 8px;
+	right: 8px;
+	margin-bottom: 6px;
+	max-height: 260px;
+	overflow-y: auto;
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	background: var(--background-secondary);
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 10px;
+	padding: 6px;
+	z-index: 20;
+	box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
+}
+
+.ocs-slash-menu.ocs-hidden {
+	display: none;
+}
+
+.ocs-slash-row {
+	display: flex;
+	align-items: baseline;
+	gap: 10px;
+	text-align: left;
+	background: transparent;
+	border: none;
+	border-radius: 6px;
+	padding: 7px 10px;
+	cursor: pointer;
+	color: var(--text-normal);
+}
+
+.ocs-slash-row:hover,
+.ocs-slash-row.ocs-selected {
+	background: var(--background-modifier-hover);
+}
+
+.ocs-slash-name {
+	font-family: var(--font-monospace);
+	font-weight: 600;
+	color: var(--text-accent);
+	white-space: nowrap;
+}
+
+.ocs-slash-hint {
+	color: var(--text-muted);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
 }
 
 .ocs-status-line {

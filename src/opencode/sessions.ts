@@ -390,14 +390,16 @@ export async function replyPermission(
 }
 
 const MATH_INSTRUCTION_KEY = "opencode-sync-math";
-const MATH_INSTRUCTION_VALUE =
+const FORMAT_INSTRUCTION_VALUE =
+	"Format chat answers with Obsidian-flavored Markdown: # headings (##, ###), **bold**, *italic*, ==highlight==, `inline code`, fenced code blocks with language, > quotes, callouts like > [!note] / > [!tip] / > [!warning] / > [!example] / > [!question], bullet, numbered and task lists (- [ ]), tables, footnotes. " +
 	"Format all mathematics using LaTeX: inline $...$ for short formulas, display $$...$$ for multi-line derivations. Never wrap formulas or equations in code blocks or backticks.";
 
 /**
- * Stores a LaTeX formatting hint as a native session instruction entry —
- * no files, per session, honored by the model (verified). Idempotent.
+ * Stores formatting instructions as a native session instruction entry —
+ * no files, per session, honored by the model (verified). Updates the
+ * value when it changed, so existing sessions pick up new rules.
  */
-export async function ensureMathInstruction(
+export async function ensureFormatInstruction(
 	client: OpenCodeClient,
 	sessionID: string,
 ): Promise<void> {
@@ -408,15 +410,19 @@ export async function ensureMathInstruction(
 			OpenCodeClient["session"]["instructions"]["entry"]["list"]
 		>[0])) as unknown as AnyRecord;
 		const arr: AnyRecord[] = Array.isArray(list) ? list : (list.data ?? []);
-		if (arr.some((e) => e?.key === MATH_INSTRUCTION_KEY)) return;
+		const existing = arr.find((e) => e?.key === MATH_INSTRUCTION_KEY);
+		if (existing?.value === FORMAT_INSTRUCTION_VALUE) return;
 		await client.session.instructions.entry.put({
 			sessionID,
 			key: MATH_INSTRUCTION_KEY,
-			value: MATH_INSTRUCTION_VALUE,
+			value: FORMAT_INSTRUCTION_VALUE,
 		} as unknown as Parameters<
 			OpenCodeClient["session"]["instructions"]["entry"]["put"]
 		>[0]);
 	} catch {
-		/* older servers may lack the API — math still renders when output as LaTeX */
+		/* older servers may lack the API — rendering still works for LaTeX output */
 	}
 }
+
+/** Backwards-compatible alias. */
+export const ensureMathInstruction = ensureFormatInstruction;
