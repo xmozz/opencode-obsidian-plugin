@@ -129,7 +129,6 @@ export class OpenCodeChatView extends ItemView {
 	private restrictBtn!: HTMLButtonElement;
 	private attachBtn!: HTMLButtonElement;
 	private forkBtn!: HTMLButtonElement;
-	private moreBtn!: HTMLButtonElement;
 	private sendBtn!: HTMLButtonElement;
 	private chipsRow!: HTMLElement;
 	private usageBadge!: HTMLElement;
@@ -271,10 +270,6 @@ export class OpenCodeChatView extends ItemView {
 		this.effortBtn = el("button", "ocs-icon-btn ocs-effort-btn", "");
 		this.effortBtn.onclick = () => this.cycleEffort();
 
-		this.moreBtn = el("button", "ocs-icon-btn", "");
-		setIconOrText(this.moreBtn, "ellipsis", "⋯", "More actions");
-		this.moreBtn.onclick = (e) => this.openComposerMenu(e as MouseEvent);
-
 		this.attachBtn = el("button", "ocs-icon-btn", "");
 		setIconOrText(this.attachBtn, "paperclip", "📎", "Attach file (system explorer)");
 		this.attachBtn.onclick = () => this.openSystemExplorer();
@@ -297,7 +292,6 @@ export class OpenCodeChatView extends ItemView {
 		left.appendChild(this.modelSelect);
 		left.appendChild(this.agentSelect);
 		left.appendChild(this.effortBtn);
-		left.appendChild(this.moreBtn);
 		const right = el("div", "ocs-toolbar-right");
 		toolbar.appendChild(right);
 		right.appendChild(this.attachBtn);
@@ -773,41 +767,6 @@ export class OpenCodeChatView extends ItemView {
 		add.title = "Attach vault file";
 		add.onclick = () => this.openAttachPicker();
 		this.chipsRow.appendChild(add);
-		const more = el("button", "ocs-icon-btn", "");
-		setIconOrText(more, "ellipsis", "⋯", "Context options");
-		more.onclick = (e) => {
-			const menu = new Menu();
-			menu.addItem((i) =>
-				i.setTitle("Attach current note").onClick(() => {
-					const note = this.app.workspace.getActiveFile();
-					if (note && note.extension === "md") {
-						const t = this.activeTab();
-						if (t) {
-							t.activeNote = note.path;
-							t.autoAttached = false;
-							this.renderChips();
-							this.persistTabs();
-						}
-					} else {
-						new Notice("No markdown file focused");
-					}
-				}),
-			);
-			menu.addItem((i) =>
-				i.setTitle("Clear attached files").onClick(() => {
-					const t = this.activeTab();
-					if (t) {
-						t.activeNote = null;
-						t.contextFiles = [];
-						t.autoAttached = false;
-						this.renderChips();
-						this.persistTabs();
-					}
-				}),
-			);
-			menu.showAtMouseEvent(e as MouseEvent);
-		};
-		this.chipsRow.appendChild(more);
 	}
 
 	private chip(path: string, isActiveNote: boolean): HTMLElement {
@@ -823,23 +782,6 @@ export class OpenCodeChatView extends ItemView {
 		};
 		chip.appendChild(x);
 		return chip;
-	}
-
-	private openComposerMenu(e: MouseEvent): void {
-		const menu = new Menu();
-		menu.addItem((i) =>
-			i.setTitle("Fork session").onClick(() => void this.forkActive()),
-		);
-		menu.addItem((i) =>
-			i.setTitle("Rename session").onClick(() => void this.renameActive()),
-		);
-		menu.addItem((i) =>
-			i.setTitle("Reload messages").onClick(() => void this.reloadActive()),
-		);
-		menu.addItem((i) =>
-			i.setTitle("Delete session (opencode)").onClick(() => void this.deleteActive()),
-		);
-		menu.showAtMouseEvent(e);
 	}
 
 	// ---------- messages ----------

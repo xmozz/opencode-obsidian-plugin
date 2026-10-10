@@ -195,6 +195,7 @@
 	min-height: 0;
 	overflow: hidden;
 	display: flex;
+	background: var(--background-primary);
 }
 
 .ocs-message-list {
@@ -662,7 +663,7 @@
 	border-radius: 12px;
 	margin: 8px;
 	padding: 8px 10px;
-	background: transparent;
+	background: var(--background-secondary);
 	display: flex;
 	flex-direction: column;
 	gap: 4px;
@@ -672,7 +673,7 @@
 .ocs-chips-row {
 	display: flex;
 	align-items: center;
-	gap: 6px;
+	gap: 4px;
 	flex-wrap: wrap;
 	min-height: 0;
 }
@@ -684,14 +685,14 @@
 .ocs-chip {
 	display: inline-flex;
 	align-items: center;
-	gap: 4px;
-	padding: 2px 4px 2px 8px;
+	gap: 2px;
+	padding: 1px 2px 1px 6px;
 	border: 1px solid var(--background-modifier-border);
-	border-radius: 8px;
+	border-radius: 6px;
 	background: var(--background-secondary);
-	font-size: calc(var(--ocs-fs, 13px) - 2px);
+	font-size: calc(var(--ocs-fs, 13px) - 3px);
 	color: var(--text-muted);
-	max-width: 220px;
+	max-width: 200px;
 }
 
 .ocs-chip-note {
@@ -732,11 +733,11 @@
 .ocs-chip-add {
 	border: 1px dashed var(--background-modifier-border);
 	background: transparent;
-	border-radius: 8px;
+	border-radius: 6px;
 	color: var(--text-muted);
 	cursor: pointer;
-	padding: 2px 8px;
-	font-size: calc(var(--ocs-fs, 13px) - 2px);
+	padding: 1px 6px;
+	font-size: calc(var(--ocs-fs, 13px) - 3px);
 }
 
 .ocs-chip-add:hover {
@@ -759,13 +760,13 @@
 	cursor: pointer;
 }
 
-/* model as subtle pill, like Grimoire */
+/* model as subtle borderless pill, width follows selection */
 .ocs-model-pill {
-	border: 1px solid var(--background-modifier-border);
-	border-radius: 8px;
-	padding: 3px 20px 3px 8px;
+	border: none;
+	border-radius: 0;
+	padding: 2px 16px 2px 2px;
+	background-position: right center;
 	max-width: 170px;
-	background-position: right 6px center;
 	color: var(--text-normal);
 }
 
