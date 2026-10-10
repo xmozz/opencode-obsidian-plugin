@@ -191,9 +191,6 @@ export class OpenCodeChatView extends ItemView {
 
 		const actions = el("div", "ocs-header-actions");
 		nav.appendChild(actions);
-		this.usageBadge = el("span", "ocs-usage-badge", "");
-		this.usageBadge.title = "Session cost / tokens";
-		actions.appendChild(this.usageBadge);
 		const histBtn = el("button", "ocs-icon-btn", "☰");
 		histBtn.title = "Sessions (/session) — shared with CLI";
 		histBtn.onclick = () => this.toggleHistory();
@@ -281,8 +278,13 @@ export class OpenCodeChatView extends ItemView {
 		};
 		row2.appendChild(this.sendBtn);
 
+		const statusRow = el("div", "ocs-status-row");
+		composer.appendChild(statusRow);
 		this.statusLine = el("div", "ocs-status-line", "Not connected");
-		composer.appendChild(this.statusLine);
+		statusRow.appendChild(this.statusLine);
+		this.usageBadge = el("span", "ocs-usage-badge", "");
+		this.usageBadge.title = "Session cost / tokens";
+		statusRow.appendChild(this.usageBadge);
 
 		this.renderApproveBtn();
 	}
@@ -645,7 +647,7 @@ export class OpenCodeChatView extends ItemView {
 		input?: Record<string, unknown>;
 		output?: string;
 		status?: string;
-		diffs?: Array<{ file: string; patch: string }>;
+		diffs?: Array<{ file: string; patch: string; created?: boolean }>;
 		filePath?: string;
 	}): HTMLElement {
 		const name = t.tool ?? "tool";
@@ -658,6 +660,7 @@ export class OpenCodeChatView extends ItemView {
 		sum.appendChild(dot);
 		if (t.diffs?.length) {
 			const files = t.diffs.map((d) => this.shortPath(d.file)).join(", ");
+			const allCreated = t.diffs.every((d) => d.created);
 			const total = t.diffs.reduce(
 				(acc, d) => {
 					const c = countDiff(d.patch);
@@ -665,7 +668,9 @@ export class OpenCodeChatView extends ItemView {
 				},
 				{ added: 0, removed: 0 },
 			);
-			sum.appendChild(el("span", "ocs-tool-name", `Edited ${files}`));
+			sum.appendChild(
+				el("span", "ocs-tool-name", `${allCreated ? "Created" : "Edited"} ${files}`),
+			);
 			sum.appendChild(el("span", "ocs-diff-stats", `+${total.added} −${total.removed}`));
 			det.open = false;
 		} else {

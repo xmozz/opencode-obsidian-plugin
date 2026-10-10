@@ -21,7 +21,7 @@ export interface ChatPart {
 	status?: string;
 	reasoning?: string;
 	/** Unified-diff patches for file edits (from tool metadata). */
-	diffs?: Array<{ file: string; patch: string }>;
+	diffs?: Array<{ file: string; patch: string; created?: boolean }>;
 	/** Resolved file path for file tools (edit/write/read/…). */
 	filePath?: string;
 }
@@ -221,7 +221,7 @@ function parseMessage(m: AnyRecord): ChatMessage[] {
 					(typeof state.error === "string" ? state.error : "") ||
 					undefined;
 				const input = (state.input as Record<string, unknown>) ?? {};
-				const diffs: Array<{ file: string; patch: string }> = [];
+				const diffs: Array<{ file: string; patch: string; created?: boolean }> = [];
 				const files = (state.metadata as AnyRecord | undefined)?.files;
 				if (Array.isArray(files)) {
 					for (const f of files as AnyRecord[]) {
@@ -237,6 +237,17 @@ function parseMessage(m: AnyRecord): ChatMessage[] {
 					[String(input.path), String(input.file), String(input.filePath)].find(
 						(v) => v && v !== "undefined",
 					) ?? undefined;
+				// New files have no server-side patch — synthesize an all-green diff.
+				if (
+					diffs.length === 0 &&
+					String(p.name ?? "") === "write" &&
+					typeof input.content === "string" &&
+					filePath
+				) {
+					const lines = (input.content as string).split("\n");
+					const patch = `@@ -0,0 +1,${lines.length} @@\n${lines.map((l) => `+${l}`).join("\n")}`;
+					diffs.push({ file: filePath, patch, created: true });
+				}
 				tools.push({
 					type: "tool",
 					tool: String(p.name ?? "tool"),

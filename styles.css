@@ -54,10 +54,9 @@
 	display: flex;
 	align-items: center;
 	gap: 4px;
-	overflow-x: auto;
+	overflow: hidden;
 	flex: 1;
 	min-width: 0;
-	scrollbar-width: thin;
 }
 
 .ocs-tab-badge {
@@ -72,6 +71,8 @@
 	cursor: pointer;
 	white-space: nowrap;
 	max-width: 180px;
+	flex: 0 1 auto;
+	min-width: 0;
 }
 
 .ocs-tab-badge:hover {
@@ -128,6 +129,8 @@
 .ocs-tab-label {
 	overflow: hidden;
 	text-overflow: ellipsis;
+	min-width: 0;
+	flex: 0 1 auto;
 }
 
 .ocs-tab-close {
@@ -720,7 +723,15 @@
 	font-weight: 600;
 }
 
+.ocs-status-row {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+}
+
 .ocs-status-line {
+	flex: 1;
+	min-width: 0;
 	font-size: calc(var(--ocs-fs, 13px) - 3px);
 	color: var(--text-faint);
 	white-space: nowrap;
