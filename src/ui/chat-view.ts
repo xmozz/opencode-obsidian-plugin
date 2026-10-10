@@ -26,6 +26,7 @@ import {
 	type ChatMessage,
 } from "../opencode/sessions";
 import { FileAttachModal } from "./attach-modal";
+import { ModelPickerModal } from "./model-modal";
 
 export const VIEW_TYPE_OPENCODE = "opencode-sync-chat";
 
@@ -144,8 +145,8 @@ export class OpenCodeChatView extends ItemView {
 	private content!: HTMLElement;
 	private historyPanel!: HTMLElement;
 	private composerText!: HTMLTextAreaElement;
-	private modelSelect!: HTMLSelectElement;
-	private agentSelect!: HTMLSelectElement;
+	private modelBtn!: HTMLButtonElement;
+	private agentBtn!: HTMLButtonElement;
 	private effortBtn!: HTMLButtonElement;
 	private variantOptions: string[] = [];
 	private restrictBtn!: HTMLButtonElement;
@@ -278,15 +279,11 @@ export class OpenCodeChatView extends ItemView {
 		this.chipsRow = el("div", "ocs-chips-row");
 		composer.appendChild(this.chipsRow);
 
-		this.modelSelect = document.createElement("select");
-		this.modelSelect.className = "ocs-model-selector ocs-model-pill";
-		this.modelSelect.title = "Model";
-		this.modelSelect.onchange = () => void this.onModelChanged();
+		this.modelBtn = el("button", "ocs-picker-btn", "");
+		this.modelBtn.onclick = () => this.openModelPicker();
 
-		this.agentSelect = document.createElement("select");
-		this.agentSelect.className = "ocs-mode-selector";
-		this.agentSelect.title = "Agent";
-		this.agentSelect.onchange = () => void this.onAgentChanged();
+		this.agentBtn = el("button", "ocs-picker-btn", "");
+		this.agentBtn.onclick = (e) => this.openAgentPicker(e as MouseEvent);
 
 		this.effortBtn = el("button", "ocs-icon-btn ocs-effort-btn", "");
 		this.effortBtn.onclick = () => this.cycleEffort();
@@ -310,8 +307,8 @@ export class OpenCodeChatView extends ItemView {
 		composer.appendChild(toolbar);
 		const left = el("div", "ocs-toolbar-left");
 		toolbar.appendChild(left);
-		left.appendChild(this.modelSelect);
-		left.appendChild(this.agentSelect);
+		left.appendChild(this.modelBtn);
+		left.appendChild(this.agentBtn);
 		left.appendChild(this.effortBtn);
 		const right = el("div", "ocs-toolbar-right");
 		toolbar.appendChild(right);
@@ -513,7 +510,7 @@ export class OpenCodeChatView extends ItemView {
 					client,
 					vaultDir,
 					this.selectedModelRef() ?? undefined,
-					this.agentSelect?.value || undefined,
+					this.plugin.settings.agent || undefined,
 				);
 				sid = created.id;
 				t = created.title;
@@ -1121,7 +1118,7 @@ export class OpenCodeChatView extends ItemView {
 	// ---------- composer actions ----------
 
 	private selectedModelRef(): { providerID: string; id: string } | null {
-		const v = this.modelSelect?.value;
+		const v = this.plugin.settings.model;
 		if (!v) return null;
 		const [providerID, ...rest] = v.split("/");
 		const id = rest.join("/");
@@ -1129,13 +1126,58 @@ export class OpenCodeChatView extends ItemView {
 		return { providerID, id };
 	}
 
-	private async onModelChanged(): Promise<void> {
+	private modelLabel(value: string): string {
+		const m = this.models.find((x) => `${x.providerID}/${x.id}` === value);
+		return m?.name || value;
+	}
+
+	private agentLabel(value: string): string {
+		const a = this.agents.find((x) => x.id === value);
+		return a?.name || a?.id || value || "Agent";
+	}
+
+	private openModelPicker(): void {
+		if (this.models.length === 0) {
+			new Notice("No models discovered yet — wait for connect, then retry.");
+			void this.refreshCatalogs();
+			return;
+		}
+		new ModelPickerModal(
+			this.app,
+			this.models.map((m) => ({
+				value: `${m.providerID}/${m.id}`,
+				name: m.name || m.id,
+				detail: `${m.providerID}/${m.id}${m.variants.length > 0 ? ` · ${m.variants.join(", ")}` : ""}`,
+			})),
+			(value) => void this.onModelChanged(value),
+		).open();
+	}
+
+	private openAgentPicker(e: MouseEvent): void {
+		const menu = new Menu();
+		if (this.agents.length === 0) {
+			menu.addItem((i) => i.setTitle("No agents discovered yet").setDisabled(true));
+		}
+		for (const a of this.agents) {
+			menu.addItem((i) =>
+				i
+					.setTitle(a.name || a.id)
+					.setChecked(a.id === this.plugin.settings.agent)
+					.onClick(() => void this.onAgentChanged(a.id)),
+			);
+		}
+		menu.showAtMouseEvent(e);
+	}
+
+	private async onModelChanged(value?: string): Promise<void> {
 		const tab = this.activeTab();
 		const client = this.plugin.client;
+		if (value !== undefined) this.plugin.settings.model = value;
 		const ref = this.selectedModelRef();
-		this.plugin.settings.model = this.modelSelect.value;
 		void this.plugin.saveSettings();
+		this.renderModelBtn();
 		this.renderVariantOptions();
+		this.updateUsageBadge();
 		if (tab && client && ref && tab.sessionId && !tab.sessionId.startsWith("pending-")) {
 			try {
 				await switchModel(client, tab.sessionId, ref.providerID, ref.id);
@@ -1174,14 +1216,15 @@ export class OpenCodeChatView extends ItemView {
 		void this.onVariantChanged(opts[(cur + 1) % opts.length]);
 	}
 
-	private async onAgentChanged(): Promise<void> {
+	private async onAgentChanged(value?: string): Promise<void> {
 		const tab = this.activeTab();
 		const client = this.plugin.client;
-		this.plugin.settings.agent = this.agentSelect.value;
+		if (value !== undefined) this.plugin.settings.agent = value;
 		void this.plugin.saveSettings();
+		this.renderAgentBtn();
 		if (tab && client && tab.sessionId && !tab.sessionId.startsWith("pending-")) {
 			try {
-				await switchAgent(client, tab.sessionId, this.agentSelect.value);
+				await switchAgent(client, tab.sessionId, this.plugin.settings.agent);
 			} catch (e) {
 				new Notice(`Agent switch failed: ${errMsg(e)}`);
 			}
@@ -1513,31 +1556,23 @@ export class OpenCodeChatView extends ItemView {
 			this.setStatus(`Catalog load failed: ${errMsg(e)}`);
 			return;
 		}
-		this.renderModelOptions();
-		this.renderAgentOptions();
+		this.renderModelBtn();
+		this.renderAgentBtn();
 		this.setStatus("");
 	}
 
-	private renderModelOptions(): void {
-		const sel = this.modelSelect;
-		sel.empty();
-		const saved = this.plugin.settings.model;
-		let found = false;
-		for (const m of this.models) {
-			const opt = document.createElement("option");
-			opt.value = `${m.providerID}/${m.id}`;
-			opt.textContent = m.name || opt.value;
-			if (opt.value === saved) {
-				opt.selected = true;
-				found = true;
-			}
-			sel.appendChild(opt);
-		}
-		if (!found && this.models.length > 0) {
-			sel.selectedIndex = 0;
-			this.plugin.settings.model = sel.value;
+	private renderModelBtn(): void {
+		if (!this.plugin.settings.model && this.models.length > 0) {
+			this.plugin.settings.model = `${this.models[0].providerID}/${this.models[0].id}`;
 			void this.plugin.saveSettings();
 		}
+		const label = this.plugin.settings.model
+			? this.modelLabel(this.plugin.settings.model)
+			: "Model";
+		this.modelBtn.empty();
+		this.modelBtn.appendChild(el("span", "ocs-picker-label", label));
+		this.modelBtn.appendChild(el("span", "ocs-picker-chev", "▾"));
+		this.modelBtn.title = `Model: ${this.plugin.settings.model || "none"} (click to change)`;
 		this.renderVariantOptions();
 	}
 
@@ -1560,28 +1595,18 @@ export class OpenCodeChatView extends ItemView {
 		this.effortBtn.title = `Reasoning effort: ${v} (click to cycle)`;
 	}
 
-	private renderAgentOptions(): void {
-		const sel = this.agentSelect;
-		sel.empty();
+	private renderAgentBtn(): void {
 		const saved = this.plugin.settings.agent;
-		let found = false;
-		for (const a of this.agents) {
-			const opt = document.createElement("option");
-			opt.value = a.id;
-			opt.textContent = a.name || a.id;
-			if (a.id === saved) {
-				opt.selected = true;
-				found = true;
-			}
-			sel.appendChild(opt);
-		}
-		if (!found && this.agents.length > 0) {
-			const preferred =
-				this.agents.find((a) => a.id === "build") ?? this.agents[0];
-			sel.value = preferred.id;
+		if (!saved && this.agents.length > 0) {
+			const preferred = this.agents.find((a) => a.id === "build") ?? this.agents[0];
 			this.plugin.settings.agent = preferred.id;
 			void this.plugin.saveSettings();
 		}
+		const label = this.agentLabel(this.plugin.settings.agent);
+		this.agentBtn.empty();
+		this.agentBtn.appendChild(el("span", "ocs-picker-label", label));
+		this.agentBtn.appendChild(el("span", "ocs-picker-chev", "▾"));
+		this.agentBtn.title = `Agent: ${this.plugin.settings.agent || "none"} (click to change)`;
 	}
 
 	// ---------- history: THE shared session list (/session) ----------

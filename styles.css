@@ -805,33 +805,58 @@ button.ocs-effort-btn:active {
 	box-shadow: none !important;
 }
 
-.ocs-model-selector,
-.ocs-mode-selector {
-	appearance: none;
-	-webkit-appearance: none;
+/* borderless picker buttons — width follows the selection */
+.ocs-picker-btn {
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
 	border: none;
+	background: transparent;
 	background-color: transparent;
-	background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%23888888' fill='none' stroke-width='1.5'/%3E%3C/svg%3E");
-	background-repeat: no-repeat;
-	background-position: right center;
-	color: var(--text-muted);
-	padding: 2px 16px 2px 2px;
+	box-shadow: none;
+	color: var(--text-normal);
+	padding: 2px;
 	font-size: calc(var(--ocs-fs, 13px) - 1px);
 	cursor: pointer;
+	max-width: 200px;
+	white-space: nowrap;
 }
 
-/* model as subtle borderless pill, width follows selection */
-.ocs-model-pill {
+button.ocs-picker-btn:hover,
+button.ocs-picker-btn:focus,
+button.ocs-picker-btn:active {
+	background: transparent;
+	background-color: transparent;
+	box-shadow: none;
 	border: none;
-	border-radius: 0;
-	padding: 2px 16px 2px 2px;
-	background-position: right center;
-	max-width: 170px;
 	color: var(--text-normal);
 }
 
-.ocs-mode-selector {
-	max-width: 130px;
+.ocs-picker-label {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.ocs-picker-chev {
+	color: var(--text-faint);
+	font-size: calc(var(--ocs-fs, 13px) - 2px);
+	flex-shrink: 0;
+}
+
+.ocs-pick-name {
+	font-weight: 600;
+}
+
+.ocs-pick-id {
+	color: var(--text-muted);
+	font-weight: 400;
+	font-size: smaller;
+}
+
+.ocs-pick-hint {
+	color: var(--text-muted);
+	font-size: smaller;
 }
 
 .ocs-toolbar {
