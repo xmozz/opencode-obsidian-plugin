@@ -359,11 +359,13 @@ export async function sendPrompt(
 	client: OpenCodeClient,
 	sessionID: string,
 	text: string,
+	files?: Array<{ uri: string }>,
 ): Promise<void> {
-	// Detect local-only slash commands handled by the UI layer.
+	// Local-only slash commands are handled by the UI layer.
 	await client.session.prompt({
 		sessionID,
 		text,
+		...(files && files.length > 0 ? { files } : {}),
 	} as unknown as Parameters<OpenCodeClient["session"]["prompt"]>[0]);
 }
 

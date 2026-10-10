@@ -39,6 +39,8 @@ interface TabState {
 	activeNote: string | null;
 	/** Manually attached vault-relative context files. */
 	contextFiles: string[];
+	/** Pasted image attachments (data URLs, sent with the next prompt). */
+	images: Array<{ id: string; name: string; dataUrl: string }>;
 	/** True while the active note chip purely mirrors the focused file. */
 	autoAttached: boolean;
 }
@@ -274,8 +276,8 @@ export class OpenCodeChatView extends ItemView {
 		this.moreBtn.onclick = (e) => this.openComposerMenu(e as MouseEvent);
 
 		this.attachBtn = el("button", "ocs-icon-btn", "");
-		setIconOrText(this.attachBtn, "paperclip", "📎", "Attach vault file");
-		this.attachBtn.onclick = () => this.openAttachPicker();
+		setIconOrText(this.attachBtn, "paperclip", "📎", "Attach file (system explorer)");
+		this.attachBtn.onclick = () => this.openSystemExplorer();
 
 		this.restrictBtn = el("button", "ocs-icon-btn", "");
 		this.restrictBtn.onclick = () => {
@@ -340,6 +342,33 @@ export class OpenCodeChatView extends ItemView {
 		};
 		this.composerText.oninput = () => {
 			this.updateSlashMenu();
+		};
+		this.composerText.onpaste = (e) => {
+			const files = Array.from(e.clipboardData?.files ?? []).filter((f) =>
+				f.type.startsWith("image/"),
+			);
+			if (files.length === 0) return;
+			const tab = this.activeTab();
+			if (!tab) return;
+			for (const file of files.slice(0, 5)) {
+				if (file.size > 10 * 1024 * 1024) {
+					new Notice(`Image too large (max 10 MB): ${file.name || "pasted image"}`);
+					continue;
+				}
+				const reader = new FileReader();
+				reader.onload = () => {
+					const dataUrl = String(reader.result ?? "");
+					if (dataUrl.startsWith("data:image")) {
+						tab.images.push({
+							id: `img-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+							name: file.name || "pasted image",
+							dataUrl,
+						});
+						this.renderChips();
+					}
+				};
+				reader.readAsDataURL(file);
+			}
 		};
 		composer.appendChild(this.composerText);
 		this.sendBtn = el("button", "ocs-send-btn", "");
@@ -435,6 +464,7 @@ export class OpenCodeChatView extends ItemView {
 				usageText: "",
 				activeNote: o.activeNote ?? null,
 				contextFiles: Array.isArray(o.contextFiles) ? o.contextFiles : [],
+				images: [],
 				autoAttached: false,
 			};
 			this.tabs.push(tab);
@@ -497,6 +527,7 @@ export class OpenCodeChatView extends ItemView {
 			usageText: "",
 			activeNote: null,
 			contextFiles: [],
+			images: [],
 			autoAttached: false,
 		};
 		this.tabs.push(tab);
@@ -675,6 +706,46 @@ export class OpenCodeChatView extends ItemView {
 		new FileAttachModal(this.app, (path) => this.attachFile(path)).open();
 	}
 
+	/** System file explorer — any file, inside or outside the vault. */
+	private openSystemExplorer(): void {
+		const tab = this.activeTab();
+		if (!tab) return;
+		const input = document.createElement("input");
+		input.type = "file";
+		input.multiple = true;
+		input.onchange = () => {
+			const files = Array.from(input.files ?? []);
+			const vaultDir = this.plugin
+				.vaultDir()
+				.replace(/\\/g, "/")
+				.replace(/\/+$/, "")
+				.toLowerCase();
+			for (const f of files) {
+				const abs = ((f as unknown as { path?: string }).path ?? "").replace(/\\/g, "/");
+				let ref = f.name;
+				if (abs && vaultDir && abs.toLowerCase().startsWith(`${vaultDir}/`)) {
+					ref = abs.slice(vaultDir.length + 1);
+				} else if (abs) {
+					ref = abs;
+				}
+				if (!tab.contextFiles.includes(ref) && tab.activeNote !== ref) {
+					tab.contextFiles.push(ref);
+				}
+			}
+			tab.autoAttached = false;
+			this.renderChips();
+			this.persistTabs();
+		};
+		input.click();
+	}
+
+	private removeImage(id: string): void {
+		const tab = this.activeTab();
+		if (!tab) return;
+		tab.images = tab.images.filter((i) => i.id !== id);
+		this.renderChips();
+	}
+
 	private renderChips(): void {
 		this.chipsRow.empty();
 		const tab = this.activeTab();
@@ -683,6 +754,20 @@ export class OpenCodeChatView extends ItemView {
 		}
 		for (const f of tab?.contextFiles ?? []) {
 			this.chipsRow.appendChild(this.chip(f, false));
+		}
+		for (const img of tab?.images ?? []) {
+			const thumb = el("span", "ocs-chip ocs-img-chip");
+			thumb.title = img.name;
+			const im = document.createElement("img");
+			im.src = img.dataUrl;
+			im.alt = img.name;
+			im.className = "ocs-img-thumb";
+			thumb.appendChild(im);
+			const x = el("button", "ocs-chip-x", "×");
+			x.title = "Remove image";
+			x.onclick = () => this.removeImage(img.id);
+			thumb.appendChild(x);
+			this.chipsRow.appendChild(thumb);
 		}
 		const add = el("button", "ocs-chip-add", "+ Add");
 		add.title = "Attach vault file";
@@ -791,7 +876,7 @@ export class OpenCodeChatView extends ItemView {
 		}
 		if (tab.messages.length === 0 && !this.queuedFor(tab.tabId).length) {
 			list.appendChild(
-				el("div", "ocs-empty", "Empty session — say hello. History is shared with the CLI."),
+				el("div", "ocs-empty", "Empty session — say hello."),
 			);
 		}
 		for (const m of tab.messages) list.appendChild(this.renderMessage(m));
@@ -1156,8 +1241,11 @@ export class OpenCodeChatView extends ItemView {
 		if (tab.activeNote) text = appendCurrentNote(text, tab.activeNote);
 		const extra = tab.contextFiles.filter((f) => f !== tab.activeNote);
 		if (extra.length > 0) text = appendContextFiles(text, extra);
+		const files = tab.images.map((i) => ({ uri: i.dataUrl }));
 		try {
-			await sendPrompt(client, tab.sessionId, text);
+			await sendPrompt(client, tab.sessionId, text, files);
+			tab.images = [];
+			this.renderChips();
 		} catch (e) {
 			tab.streaming = false;
 			tab.messages.push({
