@@ -24,7 +24,24 @@ export function describeConnectionError(error: unknown): string {
 		cur = cause;
 	}
 	if (parts.length === 0) return String(error);
-	return parts.join(" — caused by: ");
+	const details = (error as { details?: string[] }).details;
+	const base = parts.join(" — caused by: ");
+	return details?.length ? `${base}\n${details.join("\n")}` : base;
+}
+
+export interface AttemptDiagnostics {
+	at: string;
+	configuredBinary: string;
+	resolvedPath: string | null;
+	tried: string[];
+	events: string[];
+	outcome: string;
+}
+
+let lastAttempt: AttemptDiagnostics | null = null;
+
+export function getLastAttempt(): AttemptDiagnostics | null {
+	return lastAttempt;
 }
 
 function isWin(): boolean {
@@ -120,8 +137,25 @@ export function resolveBinary(configured: string): ResolvedBinary {
 async function spawnSharedService(
 	binary: string,
 	extraEnv: Record<string, string>,
+	events: string[],
 	onLog?: (line: string) => void,
 ): Promise<void> {
+	// Never pile up contenders from earlier attempts (e.g. 60s reconnect timer).
+	if (activeContender && activeContender.exitCode === null) {
+		events.push("killing stale contender from previous attempt");
+		try {
+			activeContender.kill();
+		} catch {
+			/* already gone */
+		}
+	}
+	activeContender = null;
+
+	const say = (line: string): void => {
+		events.push(line);
+		onLog?.(line);
+	};
+
 	let child: ChildProcess;
 	try {
 		child = spawn(binary, ["serve", "--service"], {
@@ -131,33 +165,65 @@ async function spawnSharedService(
 			env: { ...process.env, ...extraEnv },
 		});
 	} catch (cause) {
-		throw new Error(`Failed to start opencode background service (${binary})`, { cause });
+		throw withDetails(
+			new Error(`Failed to start opencode background service (${binary})`, { cause }),
+			events,
+		);
 	}
+	activeContender = child;
+	say(`spawned pid ${child.pid ?? "?"}: ${binary} serve --service`);
 	const stderrTail: string[] = [];
 	child.stderr?.on("data", (chunk: Buffer) => {
-		const line = chunk.toString("utf8").trim();
-		if (line) {
-			stderrTail.push(line);
-			if (stderrTail.length > 10) stderrTail.shift();
+		for (const line of chunk.toString("utf8").split(/\r?\n/)) {
+			const t = line.trim();
+			if (t) {
+				stderrTail.push(t);
+				if (stderrTail.length > 10) stderrTail.shift();
+			}
 		}
+	});
+	let earlyExit: { code: number | null; signal: NodeJS.Signals | null } | null = null;
+	const getEarlyExit = (): { code: number | null; signal: NodeJS.Signals | null } | null => earlyExit;
+	child.once("close", (code, signal) => {
+		earlyExit = { code, signal };
+		if (activeContender === child) activeContender = null;
 	});
 	const spawnError = await new Promise<Error | null>((resolve) => {
 		child.once("error", (e) => resolve(e as Error));
 		setTimeout(() => resolve(null), 500);
 	});
 	if (spawnError) {
-		throw new Error(`Failed to start opencode background service (${binary})`, {
-			cause: spawnError,
-		});
+		throw withDetails(
+			new Error(`Failed to start opencode background service (${binary})`, {
+				cause: spawnError,
+			}),
+			events,
+		);
 	}
 
-	const deadline = Date.now() + 20_000;
+	const deadline = Date.now() + 45_000;
+	let lastProgress = 0;
 	for (;;) {
+		// Fail fast: the server died instead of registering (bad config, crash, …).
+		const exited = getEarlyExit();
+		if (exited && child.exitCode !== 0) {
+			const tail =
+				stderrTail.length > 0 ? `\nServer output:\n${stderrTail.join("\n")}` : "";
+			throw withDetails(
+				new Error(
+					`opencode background service exited immediately (code ${exited.code ?? "?"}${exited.signal ? `, signal ${exited.signal}` : ""}) instead of registering.${tail}`,
+				),
+				events,
+			);
+		}
+		// A second `serve --service` next to a healthy one exits 0 silently —
+		// that just means someone else already won; discover below will find it.
 		try {
 			const found = await Service.discover();
 			if (found) {
-				onLog?.(`opencode background service ready at ${found.url}`);
+				say(`service ready at ${found.url}`);
 				child.unref?.();
+				activeContender = null;
 				return;
 			}
 		} catch {
@@ -169,11 +235,34 @@ async function spawnSharedService(
 			} catch {
 				/* already gone */
 			}
-			const tail = stderrTail.length > 0 ? `\nServer output: ${stderrTail.join("\n")}` : "";
-			throw new Error(`Timed out waiting for the opencode background service to register.${tail}`);
+			activeContender = null;
+			const tail =
+				stderrTail.length > 0 ? `\nLast server output:\n${stderrTail.join("\n")}` : "";
+			throw withDetails(
+				new Error(
+					`Timed out waiting for the opencode background service to register (45s). ` +
+						`Copy diagnostics from Settings if this persists.${tail}`,
+				),
+				events,
+			);
+		}
+		if (Date.now() - lastProgress > 5000) {
+			lastProgress = Date.now();
+			const waited = Math.round((45_000 - (deadline - Date.now())) / 1000);
+			say(
+				`still waiting for service registration… (${waited}s)` +
+					(stderrTail.length > 0 ? ` — server says: ${stderrTail[stderrTail.length - 1]}` : ""),
+			);
 		}
 		await new Promise((r) => setTimeout(r, 250));
 	}
+}
+
+let activeContender: ChildProcess | null = null;
+
+function withDetails(error: Error, events: string[]): Error {
+	(error as { details?: string[] }).details = [...events];
+	return error;
 }
 
 /**
@@ -196,20 +285,50 @@ export async function connectShared(
 		if (!(k in process.env)) process.env[k] = v;
 	}
 
-	const discovered = await Service.discover().catch(() => undefined);
-	if (discovered) {
-		onLog?.(`Found running opencode service at ${discovered.url}`);
-		return finishConnect(discovered);
-	}
+	const attempt: AttemptDiagnostics = {
+		at: new Date().toISOString(),
+		configuredBinary: (opencodeBin || "").trim() || "opencode",
+		resolvedPath: null,
+		tried: [],
+		events: [],
+		outcome: "pending",
+	};
+	lastAttempt = attempt;
+	const say = (line: string): void => {
+		attempt.events.push(line);
+		onLog?.(line);
+	};
 
-	const resolved = resolveBinary(opencodeBin);
-	onLog?.(`Starting opencode background service (${resolved.path})…`);
-	await spawnSharedService(resolved.path, extra, onLog);
-	const endpoint = await Service.discover();
-	if (!endpoint) {
-		throw new Error("opencode service started but is not discoverable.");
+	try {
+		const discovered = await Service.discover().catch(() => undefined);
+		if (discovered) {
+			say(`Found running opencode service at ${discovered.url}`);
+			const conn = await finishConnect(discovered);
+			attempt.outcome = `connected to ${discovered.url}`;
+			return conn;
+		}
+		say("no running service discovered");
+
+		const resolved = resolveBinary(opencodeBin);
+		attempt.resolvedPath = resolved.path;
+		attempt.tried = resolved.tried;
+		say(`resolved binary: ${resolved.path}`);
+		say("starting opencode background service…");
+		await spawnSharedService(resolved.path, extra, attempt.events, onLog);
+		const endpoint = await Service.discover();
+		if (!endpoint) {
+			throw withDetails(
+				new Error("opencode service started but is not discoverable."),
+				attempt.events,
+			);
+		}
+		const conn = await finishConnect(endpoint);
+		attempt.outcome = `connected to ${endpoint.url}`;
+		return conn;
+	} catch (e) {
+		attempt.outcome = `failed: ${e instanceof Error ? e.message : String(e)}`;
+		throw e;
 	}
-	return finishConnect(endpoint);
 }
 
 async function finishConnect(endpoint: {

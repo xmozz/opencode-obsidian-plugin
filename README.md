@@ -1,4 +1,4 @@
-# OpenCode for Obsidian
+# OpenCode Sync for Obsidian
 
 Grimoire-style side panel for **OpenCode only** — with one deliberate difference from Grimoire:
 
@@ -26,7 +26,7 @@ Only UI state (open tab → sessionId mapping, selected model/agent) is persiste
 
 ```sh
 npm install
-npm run build   # -> main.js (copy main.js + manifest.json + styles.css into <vault>/.obsidian/plugins/opencode-obsidian/)
+npm run build   # -> main.js (copy main.js + manifest.json + styles.css into <vault>/.obsidian/plugins/opencode-sync/)
 npm run dev     # watch mode
 ```
 
@@ -45,7 +45,7 @@ Requires desktop Obsidian (spawns/talks to local `opencode`) and an installed `o
    The tag **must** match the version in `package.json`, `manifest.json` and `versions.json` (the release workflow verifies this).
 2. In Obsidian, install and enable the community plugin **BRAT** (`Obsidian42 - BRAT`).
 3. Open BRAT settings → **Add Beta plugin** → enter `<user>/opencode-obsidian-plugin` → **Add Plugin**.
-4. Enable **OpenCode** under Settings → Community plugins. BRAT will notify you about new releases.
+4. Enable **OpenCode Sync** under Settings → Community plugins. BRAT will notify you about new releases.
 
 For a new version later: bump the version in `package.json`, `manifest.json` and `versions.json`, merge to `main`, then push a matching tag (e.g. `git tag 0.2.0 && git push origin 0.2.0`).
 

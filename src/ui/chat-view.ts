@@ -18,7 +18,7 @@ import {
 	type ChatMessage,
 } from "../opencode/sessions";
 
-export const VIEW_TYPE_OPENCODE = "opencode-chat";
+export const VIEW_TYPE_OPENCODE = "opencode-sync-chat";
 
 interface TabState {
 	tabId: string;
@@ -76,12 +76,12 @@ function renderRich(text: string): string {
 	let html = escapeHtml(text);
 	html = html.replace(/```(\w*)\n([\s\S]*?)```/g, (_m, lang, code) => {
 		blocks.push(
-			`<pre class="oc-code"><code>${code.replace(/\n$/, "")}</code></pre>`,
+			`<pre class="ocs-code"><code>${code.replace(/\n$/, "")}</code></pre>`,
 		);
 		return `\u0000${blocks.length - 1}\u0000`;
 	});
 	html = html
-		.replace(/`([^`\n]+)`/g, "<code class=\"oc-inline-code\">$1</code>")
+		.replace(/`([^`\n]+)`/g, "<code class=\"ocs-inline-code\">$1</code>")
 		.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
 		.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2">$1</a>')
 		.replace(/^### (.*)$/gm, "<h4>$1</h4>")
@@ -113,10 +113,13 @@ export class OpenCodeChatView extends ItemView {
 	private sendBtn!: HTMLButtonElement;
 	private usageBadge!: HTMLElement;
 	private statusLine!: HTMLElement;
+	private connectBanner!: HTMLElement;
+	private connectDetail!: HTMLElement;
 	private historyOpen = false;
 	private eventAbort: AbortController | null = null;
 	private liveAssistant = new Map<string, HTMLElement>();
 	private liveReasoning = new Map<string, HTMLElement>();
+	private queued: Array<{ tabId: string; text: string; ts: number }> = [];
 
 	constructor(leaf: WorkspaceLeaf, plugin: OpenCodePlugin) {
 		super(leaf);
@@ -138,9 +141,14 @@ export class OpenCodeChatView extends ItemView {
 	async onOpen(): Promise<void> {
 		this.root = this.containerEl.children[1] as HTMLElement;
 		this.root.empty();
-		this.root.addClass("oc-container");
+		this.root.addClass("ocs-container");
 		this.buildShell();
 		this.restoreTabs();
+		if (!this.plugin.client) {
+			this.setConnecting(true, this.plugin.isConnecting() ? "opencode is starting…" : "opencode has not started yet — starting…");
+			// Nudge the plugin to connect (e.g. after reload while starting).
+			void this.plugin.ensureConnected(true);
+		}
 		void this.refreshCatalogs();
 		this.startEventLoop();
 		if (this.plugin.settings.refreshOnOpen) void this.refreshHistory();
@@ -154,70 +162,78 @@ export class OpenCodeChatView extends ItemView {
 	// ---------- shell ----------
 
 	private buildShell(): void {
-		const shell = el("div", "oc-chat-window-shell");
+		const shell = el("div", "ocs-chat-window-shell");
 		this.root.appendChild(shell);
 
 		// session strip: tab bar + actions (Grimoire-like)
-		const strip = el("div", "oc-session-strip");
+		const strip = el("div", "ocs-session-strip");
 		shell.appendChild(strip);
-		const nav = el("div", "oc-input-nav-content");
+		const nav = el("div", "ocs-input-nav-content");
 		strip.appendChild(nav);
-		const tabWrap = el("div", "oc-tab-bar-container");
+		const tabWrap = el("div", "ocs-tab-bar-container");
 		nav.appendChild(tabWrap);
-		this.tabBar = el("div", "oc-tab-badges");
+		this.tabBar = el("div", "ocs-tab-badges");
 		tabWrap.appendChild(this.tabBar);
-		const newBtn = el("button", "oc-new-tab-btn", "+");
+		const newBtn = el("button", "ocs-new-tab-btn", "+");
 		newBtn.title = "New session tab";
 		newBtn.onclick = () => void this.newTab();
 		tabWrap.appendChild(newBtn);
 
-		const actions = el("div", "oc-header-actions");
+		const actions = el("div", "ocs-header-actions");
 		nav.appendChild(actions);
-		this.usageBadge = el("span", "oc-usage-badge", "");
+		this.usageBadge = el("span", "ocs-usage-badge", "");
 		this.usageBadge.title = "Session cost / tokens";
 		actions.appendChild(this.usageBadge);
-		const histBtn = el("button", "oc-icon-btn", "☰");
+		const histBtn = el("button", "ocs-icon-btn", "☰");
 		histBtn.title = "Sessions (/session) — shared with CLI";
 		histBtn.onclick = () => this.toggleHistory();
 		actions.appendChild(histBtn);
-		const menuBtn = el("button", "oc-icon-btn", "⋯");
+		const menuBtn = el("button", "ocs-icon-btn", "⋯");
 		menuBtn.title = "Tab actions";
 		menuBtn.onclick = (e) => this.openTabMenu(e as MouseEvent);
 		actions.appendChild(menuBtn);
 
+		// connection banner (loading indicator while opencode starts)
+		this.connectBanner = el("div", "ocs-connect-banner ocs-hidden");
+		const spinner = el("span", "ocs-spinner");
+		this.connectBanner.appendChild(spinner);
+		this.connectDetail = el("span", "ocs-connect-text", "opencode is starting…");
+		this.connectBanner.appendChild(this.connectDetail);
+		shell.appendChild(this.connectBanner);
+
 		// tab content
-		this.content = el("div", "oc-tab-content-container");
+		this.content = el("div", "ocs-tab-content-container");
 		shell.appendChild(this.content);
 
 		// history panel (popover)
-		this.historyPanel = el("aside", "oc-history-menu oc-hidden");
+		this.historyPanel = el("aside", "ocs-history-menu ocs-hidden");
 		shell.appendChild(this.historyPanel);
 
 		// composer
-		const composer = el("div", "oc-composer");
+		const composer = el("div", "ocs-composer");
 		shell.appendChild(composer);
-		const row1 = el("div", "oc-composer-controls");
+		const row1 = el("div", "ocs-composer-controls");
 		composer.appendChild(row1);
 
 		this.modelSelect = document.createElement("select");
-		this.modelSelect.className = "oc-model-selector";
+		this.modelSelect.className = "ocs-model-selector";
 		this.modelSelect.title = "Model";
 		this.modelSelect.onchange = () => void this.onModelChanged();
 		row1.appendChild(this.modelSelect);
 
 		this.variantSelect = document.createElement("select");
-		this.variantSelect.className = "oc-thinking-selector";
+		this.variantSelect.className = "ocs-thinking-selector";
 		this.variantSelect.title = "Reasoning effort / variant";
 		this.variantSelect.onchange = () => void this.onVariantChanged();
 		row1.appendChild(this.variantSelect);
 
 		this.agentSelect = document.createElement("select");
-		this.agentSelect.className = "oc-mode-selector";
+		this.agentSelect.className = "ocs-mode-selector";
 		this.agentSelect.title = "Agent / permission mode";
 		this.agentSelect.onchange = () => void this.onAgentChanged();
 		row1.appendChild(this.agentSelect);
 
-		this.approveBtn = el("button", "oc-permission-toggle", "Safe");
+		this.approveBtn = el("button", "ocs-permission-toggle", "Safe");
 		this.approveBtn.title = "Toggle auto-approve permissions";
 		this.approveBtn.onclick = () => {
 			this.plugin.settings.autoApprove = !this.plugin.settings.autoApprove;
@@ -226,10 +242,10 @@ export class OpenCodeChatView extends ItemView {
 		};
 		row1.appendChild(this.approveBtn);
 
-		const row2 = el("div", "oc-composer-input-row");
+		const row2 = el("div", "ocs-composer-input-row");
 		composer.appendChild(row2);
 		this.composerText = document.createElement("textarea");
-		this.composerText.className = "oc-input";
+		this.composerText.className = "ocs-input";
 		this.composerText.placeholder =
 			"Ask OpenCode…  (/session, /new, /compact, /fork, Enter to send)";
 		this.composerText.rows = 3;
@@ -247,7 +263,7 @@ export class OpenCodeChatView extends ItemView {
 			}
 		};
 		row2.appendChild(this.composerText);
-		this.sendBtn = el("button", "oc-send-btn", "Send");
+		this.sendBtn = el("button", "ocs-send-btn", "Send");
 		this.sendBtn.onclick = () => {
 			const tab = this.activeTab();
 			if (tab?.streaming) void this.stopCurrent();
@@ -255,7 +271,7 @@ export class OpenCodeChatView extends ItemView {
 		};
 		row2.appendChild(this.sendBtn);
 
-		this.statusLine = el("div", "oc-status-line", "Not connected");
+		this.statusLine = el("div", "ocs-status-line", "Not connected");
 		composer.appendChild(this.statusLine);
 
 		this.renderApproveBtn();
@@ -264,7 +280,7 @@ export class OpenCodeChatView extends ItemView {
 	private renderApproveBtn(): void {
 		const auto = this.plugin.settings.autoApprove;
 		this.approveBtn.textContent = auto ? "Auto-approve" : "Safe";
-		this.approveBtn.classList.toggle("oc-auto", auto);
+		this.approveBtn.classList.toggle("ocs-auto", auto);
 	}
 
 	// ---------- tabs (UI-only; sessions live in opencode, not in files) ----------
@@ -404,15 +420,15 @@ export class OpenCodeChatView extends ItemView {
 		this.tabs.forEach((t, i) => {
 			const b = el(
 				"button",
-				`oc-tab-badge ${t.tabId === this.activeTabId ? "oc-active" : "oc-idle"} ${t.streaming ? "oc-streaming" : ""} ${t.attention ? "oc-attention" : ""}`,
+				`ocs-tab-badge ${t.tabId === this.activeTabId ? "ocs-active" : "ocs-idle"} ${t.streaming ? "ocs-streaming" : ""} ${t.attention ? "ocs-attention" : ""}`,
 			);
 			b.title = `${t.title}\n${t.sessionId}`;
-			const dot = el("span", "oc-tab-activity-dot");
+			const dot = el("span", "ocs-tab-activity-dot");
 			b.appendChild(dot);
-			b.appendChild(el("span", "oc-tab-number", String(i + 1)));
+			b.appendChild(el("span", "ocs-tab-number", String(i + 1)));
 			const label = el(
 				"span",
-				"oc-tab-label",
+				"ocs-tab-label",
 				t.title.length > 22 ? t.title.slice(0, 21) + "…" : t.title,
 			);
 			b.appendChild(label);
@@ -454,27 +470,43 @@ export class OpenCodeChatView extends ItemView {
 
 	// ---------- messages ----------
 
+	/** Loading state while the opencode service is (re)starting. */
+	setConnecting(active: boolean, detail?: string): void {
+		this.connectBanner.classList.toggle("ocs-hidden", !active);
+		if (detail) this.connectDetail.textContent = detail;
+		else if (active) this.connectDetail.textContent = "opencode is starting…";
+		this.sendBtn.textContent = this.activeTab()?.streaming ? "Stop" : "Send";
+	}
+
 	private renderContent(): void {
 		this.content.empty();
 		const tab = this.activeTab();
 		if (!tab) {
-			this.content.appendChild(el("div", "oc-empty", "Open a session tab to start."));
+			this.content.appendChild(el("div", "ocs-empty", "Open a session tab to start."));
 			this.sendBtn.textContent = "Send";
 			return;
 		}
 		this.sendBtn.textContent = tab.streaming ? "Stop" : "Send";
-		const list = el("div", "oc-message-list");
+		const list = el("div", "ocs-message-list");
 		this.content.appendChild(list);
 		if (!tab.loaded) {
-			list.appendChild(el("div", "oc-wait", "Loading native session history…"));
+			list.appendChild(el("div", "ocs-wait", "Loading native session history…"));
 			return;
 		}
-		if (tab.messages.length === 0) {
+		if (tab.messages.length === 0 && !this.queuedFor(tab.tabId).length) {
 			list.appendChild(
-				el("div", "oc-empty", "Empty session — say hello. History is shared with the CLI."),
+				el("div", "ocs-empty", "Empty session — say hello. History is shared with the CLI."),
 			);
 		}
 		for (const m of tab.messages) list.appendChild(this.renderMessage(m));
+		for (const q of this.queuedFor(tab.tabId)) {
+			const wrap = el("div", "ocs-msg ocs-user ocs-queued");
+			wrap.appendChild(el("div", "ocs-msg-meta", `⏳ queued — will send once opencode is ready · ${fmtTime(q.ts)}`));
+			const body = el("div", "ocs-msg-body");
+			body.innerHTML = renderRich(q.text);
+			wrap.appendChild(body);
+			list.appendChild(wrap);
+		}
 		// live (streaming) containers are appended by the event loop
 		const live = this.liveAssistant.get(tab.sessionId);
 		if (live && !live.parentElement) list.appendChild(live);
@@ -483,17 +515,17 @@ export class OpenCodeChatView extends ItemView {
 	}
 
 	private renderMessage(m: ChatMessage): HTMLElement {
-		const wrap = el("div", `oc-msg oc-${m.role}`);
-		const meta = el("div", "oc-msg-meta", fmtTime(m.timestamp));
+		const wrap = el("div", `ocs-msg ocs-${m.role}`);
+		const meta = el("div", "ocs-msg-meta", fmtTime(m.timestamp));
 		wrap.appendChild(meta);
 		if (m.reasoning.length > 0) {
 			const det = document.createElement("details");
-			det.className = "oc-thinking";
+			det.className = "ocs-thinking";
 			const sum = document.createElement("summary");
 			sum.textContent = `Thinking (${m.reasoning.length})`;
 			det.appendChild(sum);
 			for (const r of m.reasoning) {
-				const d = el("div", "oc-thinking-text");
+				const d = el("div", "ocs-thinking-text");
 				d.innerHTML = renderRich(r);
 				det.appendChild(d);
 			}
@@ -503,7 +535,7 @@ export class OpenCodeChatView extends ItemView {
 			wrap.appendChild(this.renderTool(t.tool ?? "tool", t.input ?? {}, t.output, t.status ?? "completed"));
 		}
 		if (m.text) {
-			const body = el("div", "oc-msg-body");
+			const body = el("div", "ocs-msg-body");
 			body.innerHTML = renderRich(m.text);
 			wrap.appendChild(body);
 		}
@@ -517,17 +549,17 @@ export class OpenCodeChatView extends ItemView {
 		status = "completed",
 	): HTMLElement {
 		const det = document.createElement("details");
-		det.className = `oc-toolcall oc-${status}`;
+		det.className = `ocs-toolcall ocs-${status}`;
 		const sum = document.createElement("summary");
-		const dot = el("span", "oc-tool-dot");
+		const dot = el("span", "ocs-tool-dot");
 		sum.appendChild(dot);
-		sum.appendChild(el("span", "oc-tool-name", name));
+		sum.appendChild(el("span", "ocs-tool-name", name));
 		const short = summarizeInput(input);
-		if (short) sum.appendChild(el("span", "oc-tool-arg", short));
+		if (short) sum.appendChild(el("span", "ocs-tool-arg", short));
 		det.appendChild(sum);
-		const inp = el("pre", "oc-tool-input", safeJson(input));
+		const inp = el("pre", "ocs-tool-input", safeJson(input));
 		det.appendChild(inp);
-		if (output) det.appendChild(el("pre", "oc-tool-output", output.slice(0, 4000)));
+		if (output) det.appendChild(el("pre", "ocs-tool-output", output.slice(0, 4000)));
 		return det;
 	}
 
@@ -620,13 +652,46 @@ export class OpenCodeChatView extends ItemView {
 
 	private async sendCurrent(): Promise<void> {
 		const tab = this.activeTab();
-		const client = this.plugin.client;
-		if (!tab || !client) {
-			new Notice("OpenCode not connected yet");
-			return;
-		}
+		if (!tab) return;
 		const raw = this.composerText.value.trim();
 		if (!raw) return;
+		this.composerText.value = "";
+
+		const client = this.plugin.client;
+		if (!client || this.plugin.isConnecting()) {
+			this.queued.push({ tabId: tab.tabId, text: raw, ts: Date.now() });
+			this.renderContent();
+			new Notice("opencode is still starting — message queued, will send when ready.");
+			return;
+		}
+		void this.dispatchText(tab, raw);
+	}
+
+	/** Sends queued messages (oldest first) once the service is ready. */
+	async flushQueue(): Promise<void> {
+		if (this.queued.length === 0) return;
+		const client = this.plugin.client;
+		if (!client) return;
+		const items = [...this.queued].sort((a, b) => a.ts - b.ts);
+		this.queued = [];
+		let sent = 0;
+		for (const q of items) {
+			const tab = this.tabs.find((t) => t.tabId === q.tabId) ?? this.activeTab();
+			if (!tab) continue;
+			sent++;
+			await this.dispatchText(tab, q.text);
+		}
+		this.renderContent();
+		if (sent > 0) new Notice(`opencode is ready — ${sent} queued message${sent === 1 ? "" : "s"} sent.`);
+	}
+
+	private queuedFor(tabId: string): Array<{ tabId: string; text: string; ts: number }> {
+		return this.queued.filter((q) => q.tabId === tabId);
+	}
+
+	private async dispatchText(tab: TabState, raw: string): Promise<void> {
+		const client = this.plugin.client;
+		if (!client) return;
 		if (tab.sessionId.startsWith("pending-")) {
 			new Notice("Session not ready yet");
 			return;
@@ -881,20 +946,20 @@ export class OpenCodeChatView extends ItemView {
 
 	private openHistory(): void {
 		this.historyOpen = true;
-		this.historyPanel.removeClass("oc-hidden");
+		this.historyPanel.removeClass("ocs-hidden");
 		void this.refreshHistory();
 	}
 
 	private closeHistory(): void {
 		this.historyOpen = false;
-		this.historyPanel.addClass("oc-hidden");
+		this.historyPanel.addClass("ocs-hidden");
 	}
 
 	async refreshHistory(): Promise<void> {
 		const client = this.plugin.client;
 		if (!client) {
 			this.historyPanel.empty();
-			this.historyPanel.appendChild(el("div", "oc-history-empty", "Not connected"));
+			this.historyPanel.appendChild(el("div", "ocs-history-empty", "Not connected"));
 			if (this.historyOpen) this.openHistoryRender([]);
 			return;
 		}
@@ -909,23 +974,23 @@ export class OpenCodeChatView extends ItemView {
 
 	private openHistoryRender(sessions: VaultSession[]): void {
 		this.historyPanel.empty();
-		const head = el("div", "oc-history-head");
-		head.appendChild(el("span", "oc-history-title", `Sessions · ${sessions.length} (shared with CLI)`));
-		const refBtn = el("button", "oc-icon-btn", "⟳");
+		const head = el("div", "ocs-history-head");
+		head.appendChild(el("span", "ocs-history-title", `Sessions · ${sessions.length} (shared with CLI)`));
+		const refBtn = el("button", "ocs-icon-btn", "⟳");
 		refBtn.title = "Refresh (/session)";
 		refBtn.onclick = () => void this.refreshHistory();
 		head.appendChild(refBtn);
-		const newBtn = el("button", "oc-icon-btn", "+");
+		const newBtn = el("button", "ocs-icon-btn", "+");
 		newBtn.title = "New session";
 		newBtn.onclick = () => void this.newTab();
 		head.appendChild(newBtn);
-		const closeBtn = el("button", "oc-icon-btn", "✕");
+		const closeBtn = el("button", "ocs-icon-btn", "✕");
 		closeBtn.onclick = () => this.closeHistory();
 		head.appendChild(closeBtn);
 		this.historyPanel.appendChild(head);
 
 		const search = document.createElement("input");
-		search.className = "oc-history-search";
+		search.className = "ocs-history-search";
 		search.placeholder = "Search sessions…";
 		search.oninput = () => {
 			const q = search.value.toLowerCase();
@@ -939,11 +1004,11 @@ export class OpenCodeChatView extends ItemView {
 			}
 		};
 		this.historyPanel.appendChild(search);
-		const list = el("div", "oc-history-list");
+		const list = el("div", "ocs-history-list");
 		this.historyPanel.appendChild(list);
 		if (sessions.length === 0) {
 			list.appendChild(
-				el("div", "oc-history-empty", "No sessions in this vault yet — create one or use the CLI here."),
+				el("div", "ocs-history-empty", "No sessions in this vault yet — create one or use the CLI here."),
 			);
 		}
 		const sorted = [...sessions].sort((a, b) => b.updated - a.updated);
@@ -951,12 +1016,12 @@ export class OpenCodeChatView extends ItemView {
 	}
 
 	private historyRow(s: VaultSession): HTMLElement {
-		const row = el("div", "oc-history-row");
-		const main = el("button", "oc-history-main");
-		const title = el("div", "oc-history-name", s.title || "Untitled session");
+		const row = el("div", "ocs-history-row");
+		const main = el("button", "ocs-history-main");
+		const title = el("div", "ocs-history-name", s.title || "Untitled session");
 		const sub = el(
 			"div",
-			"oc-history-sub",
+			"ocs-history-sub",
 			`${s.modelProvider ? `${s.modelProvider}/${s.modelId}` : s.modelId || "model ?"} · ${fmtTime(s.updated)}`,
 		);
 		main.appendChild(title);
@@ -964,7 +1029,7 @@ export class OpenCodeChatView extends ItemView {
 		main.title = s.id;
 		main.onclick = () => void this.openSessionInActiveTab(s);
 		row.appendChild(main);
-		const del = el("button", "oc-icon-btn", "🗑");
+		const del = el("button", "ocs-icon-btn", "🗑");
 		del.title = "Delete session in opencode";
 		del.onclick = async () => {
 			const client = this.plugin.client;
@@ -1030,13 +1095,13 @@ export class OpenCodeChatView extends ItemView {
 	}
 
 	private messageListEl(): HTMLElement | null {
-		return this.content.querySelector(".oc-message-list");
+		return this.content.querySelector(".ocs-message-list");
 	}
 
 	private ensureLiveAssistant(tab: TabState): HTMLElement {
 		let live = this.liveAssistant.get(tab.sessionId);
 		if (!live || !live.parentElement) {
-			live = el("div", "oc-msg oc-assistant oc-live");
+			live = el("div", "ocs-msg ocs-assistant ocs-live");
 			this.liveAssistant.set(tab.sessionId, live);
 			if (tab.tabId === this.activeTabId) {
 				this.messageListEl()?.appendChild(live);
@@ -1112,7 +1177,7 @@ export class OpenCodeChatView extends ItemView {
 					if (live) {
 						// fold live DOM into message history
 						const textParts: string[] = [];
-						live.querySelectorAll(".oc-live-text").forEach((n) => {
+						live.querySelectorAll(".ocs-live-text").forEach((n) => {
 							textParts.push(n.textContent ?? "");
 						});
 						if (textParts.join("").trim()) {
@@ -1158,7 +1223,7 @@ export class OpenCodeChatView extends ItemView {
 			case "session.text.started": {
 				if (tab) {
 					const live = this.ensureLiveAssistant(tab);
-					const d = el("div", "oc-live-text");
+					const d = el("div", "ocs-live-text");
 					d.dataset.msg = String(data.assistantMessageID ?? "");
 					live.appendChild(d);
 				}
@@ -1168,10 +1233,10 @@ export class OpenCodeChatView extends ItemView {
 				if (tab) {
 					const live = this.ensureLiveAssistant(tab);
 					let target = live.querySelector(
-						`.oc-live-text[data-msg="${cssEsc(String(data.assistantMessageID ?? ""))}"]`,
+						`.ocs-live-text[data-msg="${cssEsc(String(data.assistantMessageID ?? ""))}"]`,
 					) as HTMLElement | null;
 					if (!target) {
-						target = el("div", "oc-live-text");
+						target = el("div", "ocs-live-text");
 						live.appendChild(target);
 					}
 					target.textContent = (target.textContent ?? "") + String(data.delta ?? "");
@@ -1187,7 +1252,7 @@ export class OpenCodeChatView extends ItemView {
 					const live = this.ensureLiveAssistant(tab);
 					let r = this.liveReasoning.get(`${tab.sessionId}-r`);
 					if (!r || !r.parentElement) {
-						r = el("div", "oc-live-reasoning");
+						r = el("div", "ocs-live-reasoning");
 						this.liveReasoning.set(`${tab.sessionId}-r`, r);
 						live.appendChild(r);
 					}
@@ -1201,12 +1266,12 @@ export class OpenCodeChatView extends ItemView {
 					const live = this.ensureLiveAssistant(tab);
 					const id = String(data.id ?? "");
 					if (id && !live.querySelector(`[data-tool="${cssEsc(id)}"]`)) {
-						const tool = el("div", "oc-toolcall oc-running");
+						const tool = el("div", "ocs-toolcall ocs-running");
 						tool.dataset.tool = id;
 						const name = String(
 							(data as Record<string, unknown>).name ?? "tool",
 						);
-						tool.innerHTML = `<span class="oc-tool-dot"></span><span class="oc-tool-name">${escapeHtml(name)}</span>`;
+						tool.innerHTML = `<span class="ocs-tool-dot"></span><span class="ocs-tool-name">${escapeHtml(name)}</span>`;
 						live.appendChild(tool);
 					}
 				}
@@ -1220,9 +1285,9 @@ export class OpenCodeChatView extends ItemView {
 						`[data-tool="${cssEsc(String(data.id ?? ""))}"]`,
 					);
 					if (node) {
-						node.classList.remove("oc-running");
+						node.classList.remove("ocs-running");
 						node.classList.add(
-							type === "session.tool.success" ? "oc-done" : "oc-error",
+							type === "session.tool.success" ? "ocs-done" : "ocs-error",
 						);
 					}
 				}
@@ -1286,19 +1351,19 @@ export class OpenCodeChatView extends ItemView {
 	): void {
 		const list = this.messageListEl();
 		if (!list) return;
-		const card = el("div", "oc-permission-card");
+		const card = el("div", "ocs-permission-card");
 		card.appendChild(
-			el("div", "oc-permission-title", `Permission: ${req.action}`),
+			el("div", "ocs-permission-title", `Permission: ${req.action}`),
 		);
-		if (req.message) card.appendChild(el("div", "oc-permission-msg", req.message));
+		if (req.message) card.appendChild(el("div", "ocs-permission-msg", req.message));
 		if (req.resources.length > 0) {
 			card.appendChild(
-				el("div", "oc-permission-res", req.resources.slice(0, 5).join("\n")),
+				el("div", "ocs-permission-res", req.resources.slice(0, 5).join("\n")),
 			);
 		}
-		const row = el("div", "oc-card-row");
-		const accept = el("button", "oc-btn oc-accept", "Allow");
-		const reject = el("button", "oc-btn", "Deny");
+		const row = el("div", "ocs-card-row");
+		const accept = el("button", "ocs-btn ocs-accept", "Allow");
+		const reject = el("button", "ocs-btn", "Deny");
 		accept.onclick = () => {
 			const client = this.plugin.client;
 			if (client) void replyPermission(client, req.requestID, "accept").catch((e) => new Notice(errMsg(e)));
@@ -1319,10 +1384,10 @@ export class OpenCodeChatView extends ItemView {
 	private renderFormCard(tab: TabState, form: Record<string, unknown>): void {
 		const list = this.messageListEl();
 		if (!list) return;
-		const card = el("div", "oc-question-card");
-		const title = el("div", "oc-question-title", String(form.title ?? "Question"));
-		const chev = el("button", "oc-icon-btn", "⌄");
-		chev.onclick = () => card.classList.toggle("oc-collapsed");
+		const card = el("div", "ocs-question-card");
+		const title = el("div", "ocs-question-title", String(form.title ?? "Question"));
+		const chev = el("button", "ocs-icon-btn", "⌄");
+		chev.onclick = () => card.classList.toggle("ocs-collapsed");
 		title.appendChild(chev);
 		card.appendChild(title);
 		const fields = form.fields as Record<string, unknown> | undefined;
@@ -1331,22 +1396,22 @@ export class OpenCodeChatView extends ItemView {
 			for (const [key, f] of Object.entries(fields)) {
 				const fld = f as Record<string, unknown>;
 				const label = String(fld.label ?? key);
-				card.appendChild(el("div", "oc-field-label", label));
+				card.appendChild(el("div", "ocs-field-label", label));
 				const opts = fld.options as { value?: string; label?: string }[] | undefined;
 				if (Array.isArray(opts) && opts.length > 0) {
-					const box = el("div", "oc-options");
+					const box = el("div", "ocs-options");
 					for (const o of opts) {
-						const b = el("button", "oc-btn", String(o.label ?? o.value));
+						const b = el("button", "ocs-btn", String(o.label ?? o.value));
 						b.onclick = () => {
 							answer[key] = String(o.value ?? o.label);
-							b.classList.toggle("oc-selected");
+							b.classList.toggle("ocs-selected");
 						};
 						box.appendChild(b);
 					}
 					card.appendChild(box);
 				} else {
 					const input = document.createElement("input");
-					input.className = "oc-field-input";
+					input.className = "ocs-field-input";
 					input.onchange = () => {
 						answer[key] = input.value;
 					};
@@ -1354,8 +1419,8 @@ export class OpenCodeChatView extends ItemView {
 				}
 			}
 		}
-		const row = el("div", "oc-card-row");
-		const submit = el("button", "oc-btn oc-accept", "Submit");
+		const row = el("div", "ocs-card-row");
+		const submit = el("button", "ocs-btn ocs-accept", "Submit");
 		submit.onclick = () => {
 			const client = this.plugin.client;
 			if (!client) return;
@@ -1379,6 +1444,7 @@ export class OpenCodeChatView extends ItemView {
 	}
 
 	onConnected(): void {
+		this.setConnecting(false);
 		this.setStatus("Connected — loading…");
 		void this.refreshCatalogs();
 		for (const t of this.tabs) {
@@ -1386,6 +1452,7 @@ export class OpenCodeChatView extends ItemView {
 		}
 		void this.refreshHistory();
 		this.startEventLoop();
+		void this.flushQueue();
 	}
 }
 

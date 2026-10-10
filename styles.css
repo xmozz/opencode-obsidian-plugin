@@ -2,7 +2,7 @@
    UI layout inspired by Grimoire (MIT, (c) Michael Makarov / sandsaber).
    All styles here are original implementations. */
 
-.oc-container {
+.ocs-container {
 	display: flex;
 	flex-direction: column;
 	height: 100%;
@@ -11,7 +11,7 @@
 	font-size: 13px;
 }
 
-.oc-chat-window-shell {
+.ocs-chat-window-shell {
 	display: flex;
 	flex-direction: column;
 	height: 100%;
@@ -20,19 +20,19 @@
 }
 
 /* ---- session strip / tab bar (Grimoire-like) ---- */
-.oc-session-strip {
+.ocs-session-strip {
 	border-bottom: 1px solid var(--background-modifier-border);
 	padding: 6px 8px;
 	background: var(--background-secondary);
 }
 
-.oc-input-nav-content {
+.ocs-input-nav-content {
 	display: flex;
 	align-items: center;
 	gap: 8px;
 }
 
-.oc-tab-bar-container {
+.ocs-tab-bar-container {
 	display: flex;
 	align-items: center;
 	gap: 4px;
@@ -40,7 +40,7 @@
 	min-width: 0;
 }
 
-.oc-tab-badges {
+.ocs-tab-badges {
 	display: flex;
 	align-items: center;
 	gap: 4px;
@@ -50,7 +50,7 @@
 	scrollbar-width: thin;
 }
 
-.oc-tab-badge {
+.ocs-tab-badge {
 	display: flex;
 	align-items: center;
 	gap: 6px;
@@ -64,48 +64,48 @@
 	max-width: 180px;
 }
 
-.oc-tab-badge:hover {
+.ocs-tab-badge:hover {
 	background: var(--background-modifier-hover);
 }
 
-.oc-tab-badge.oc-active {
+.ocs-tab-badge.ocs-active {
 	background: var(--background-modifier-hover);
 	border-color: var(--background-modifier-border);
 	color: var(--text-normal);
 }
 
-.oc-tab-badge.oc-streaming .oc-tab-activity-dot {
+.ocs-tab-badge.ocs-streaming .ocs-tab-activity-dot {
 	background: var(--text-accent);
-	animation: oc-pulse 1s infinite alternate;
+	animation: ocs-pulse 1s infinite alternate;
 }
 
-.oc-tab-badge.oc-attention .oc-tab-activity-dot {
+.ocs-tab-badge.ocs-attention .ocs-tab-activity-dot {
 	background: var(--text-warning, orange);
 }
 
-.oc-tab-badge.oc-idle .oc-tab-activity-dot {
+.ocs-tab-badge.ocs-idle .ocs-tab-activity-dot {
 	background: var(--text-faint);
 }
 
-.oc-tab-activity-dot {
+.ocs-tab-activity-dot {
 	width: 7px;
 	height: 7px;
 	border-radius: 50%;
 	flex-shrink: 0;
 }
 
-.oc-tab-number {
+.ocs-tab-number {
 	font-size: 11px;
 	opacity: 0.7;
 }
 
-.oc-tab-label {
+.ocs-tab-label {
 	overflow: hidden;
 	text-overflow: ellipsis;
 }
 
-.oc-new-tab-btn,
-.oc-icon-btn {
+.ocs-new-tab-btn,
+.ocs-icon-btn {
 	border: none;
 	background: transparent;
 	color: var(--text-muted);
@@ -115,19 +115,19 @@
 	font-size: 14px;
 }
 
-.oc-new-tab-btn:hover,
-.oc-icon-btn:hover {
+.ocs-new-tab-btn:hover,
+.ocs-icon-btn:hover {
 	background: var(--background-modifier-hover);
 	color: var(--text-normal);
 }
 
-.oc-header-actions {
+.ocs-header-actions {
 	display: flex;
 	align-items: center;
 	gap: 4px;
 }
 
-.oc-usage-badge {
+.ocs-usage-badge {
 	font-size: 11px;
 	color: var(--text-muted);
 	padding: 2px 8px;
@@ -136,19 +136,19 @@
 	white-space: nowrap;
 }
 
-.oc-usage-badge:empty {
+.ocs-usage-badge:empty {
 	display: none;
 }
 
 /* ---- messages ---- */
-.oc-tab-content-container {
+.ocs-tab-content-container {
 	flex: 1;
 	min-height: 0;
 	overflow: hidden;
 	display: flex;
 }
 
-.oc-message-list {
+.ocs-message-list {
 	flex: 1;
 	overflow-y: auto;
 	padding: 12px;
@@ -157,51 +157,51 @@
 	gap: 10px;
 }
 
-.oc-empty,
-.oc-wait {
+.ocs-empty,
+.ocs-wait {
 	color: var(--text-muted);
 	text-align: center;
 	padding: 24px 12px;
 }
 
-.oc-msg {
+.ocs-msg {
 	border-radius: 10px;
 	padding: 8px 10px;
 	max-width: 100%;
 }
 
-.oc-msg.oc-user {
+.ocs-msg.ocs-user {
 	background: var(--background-secondary);
 	border: 1px solid var(--background-modifier-border);
 	align-self: flex-end;
 	white-space: pre-wrap;
 }
 
-.oc-msg.oc-assistant {
+.ocs-msg.ocs-assistant {
 	background: transparent;
 	border: none;
 	align-self: stretch;
 	padding-left: 2px;
 }
 
-.oc-msg-meta {
+.ocs-msg-meta {
 	font-size: 10px;
 	color: var(--text-faint);
 	margin-bottom: 4px;
 }
 
-.oc-msg-body {
+.ocs-msg-body {
 	line-height: 1.55;
 	word-wrap: break-word;
 }
 
-.oc-msg-body h2,
-.oc-msg-body h3,
-.oc-msg-body h4 {
+.ocs-msg-body h2,
+.ocs-msg-body h3,
+.ocs-msg-body h4 {
 	margin: 8px 0 4px;
 }
 
-.oc-code {
+.ocs-code {
 	background: var(--background-secondary);
 	border: 1px solid var(--background-modifier-border);
 	border-radius: 8px;
@@ -209,7 +209,7 @@
 	overflow-x: auto;
 }
 
-.oc-inline-code {
+.ocs-inline-code {
 	background: var(--background-modifier-hover);
 	border-radius: 4px;
 	padding: 0 4px;
@@ -217,21 +217,21 @@
 	font-size: 12px;
 }
 
-.oc-thinking {
+.ocs-thinking {
 	border-left: 2px solid var(--background-modifier-border);
 	padding-left: 8px;
 	color: var(--text-muted);
 	font-size: 12px;
 }
 
-.oc-thinking-text {
+.ocs-thinking-text {
 	margin: 4px 0;
 	white-space: pre-wrap;
 }
 
-.oc-toolcall,
-.oc-tool-call,
-.oc-toolcall {
+.ocs-toolcall,
+.ocs-tool-call,
+.ocs-toolcall {
 	border: 1px solid var(--background-modifier-border);
 	border-radius: 8px;
 	padding: 6px 8px;
@@ -239,15 +239,15 @@
 	font-size: 12px;
 }
 
-.oc-toolcall summary,
-.oc-tool-call summary {
+.ocs-toolcall summary,
+.ocs-tool-call summary {
 	cursor: pointer;
 	display: flex;
 	align-items: center;
 	gap: 6px;
 }
 
-.oc-tool-dot {
+.ocs-tool-dot {
 	width: 8px;
 	height: 8px;
 	border-radius: 50%;
@@ -255,34 +255,34 @@
 	flex-shrink: 0;
 }
 
-.oc-toolcall.oc-running .oc-tool-dot {
+.ocs-toolcall.ocs-running .ocs-tool-dot {
 	background: var(--text-accent);
-	animation: oc-pulse 1s infinite alternate;
+	animation: ocs-pulse 1s infinite alternate;
 }
 
-.oc-toolcall.oc-done .oc-tool-dot,
-.oc-toolcall.oc-completed .oc-tool-dot {
+.ocs-toolcall.ocs-done .ocs-tool-dot,
+.ocs-toolcall.ocs-completed .ocs-tool-dot {
 	background: var(--text-success, green);
 }
 
-.oc-toolcall.oc-error .oc-tool-dot {
+.ocs-toolcall.ocs-error .ocs-tool-dot {
 	background: var(--text-error, red);
 }
 
-.oc-tool-name {
+.ocs-tool-name {
 	font-family: var(--font-monospace);
 	font-weight: 600;
 }
 
-.oc-tool-arg {
+.ocs-tool-arg {
 	color: var(--text-muted);
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
 }
 
-.oc-tool-input,
-.oc-tool-output {
+.ocs-tool-input,
+.ocs-tool-output {
 	background: var(--background-primary);
 	border-radius: 6px;
 	padding: 6px;
@@ -292,12 +292,12 @@
 	overflow-y: auto;
 }
 
-.oc-live-text {
+.ocs-live-text {
 	white-space: pre-wrap;
 	line-height: 1.55;
 }
 
-.oc-live-reasoning {
+.ocs-live-reasoning {
 	border-left: 2px solid var(--text-accent);
 	padding-left: 8px;
 	color: var(--text-muted);
@@ -307,23 +307,23 @@
 }
 
 /* ---- permission / question cards ---- */
-.oc-permission-card,
-.oc-question-card {
+.ocs-permission-card,
+.ocs-question-card {
 	border: 1px solid var(--text-accent);
 	border-radius: 10px;
 	padding: 10px;
 	background: var(--background-secondary);
 }
 
-.oc-question-card.oc-collapsed .oc-field-label,
-.oc-question-card.oc-collapsed .oc-options,
-.oc-question-card.oc-collapsed .oc-field-input,
-.oc-question-card.oc-collapsed .oc-card-row {
+.ocs-question-card.ocs-collapsed .ocs-field-label,
+.ocs-question-card.ocs-collapsed .ocs-options,
+.ocs-question-card.ocs-collapsed .ocs-field-input,
+.ocs-question-card.ocs-collapsed .ocs-card-row {
 	display: none;
 }
 
-.oc-permission-title,
-.oc-question-title {
+.ocs-permission-title,
+.ocs-question-title {
 	font-weight: 700;
 	margin-bottom: 6px;
 	display: flex;
@@ -331,8 +331,8 @@
 	align-items: center;
 }
 
-.oc-permission-msg,
-.oc-permission-res {
+.ocs-permission-msg,
+.ocs-permission-res {
 	font-size: 12px;
 	color: var(--text-muted);
 	white-space: pre-wrap;
@@ -340,13 +340,13 @@
 	font-family: var(--font-monospace);
 }
 
-.oc-card-row {
+.ocs-card-row {
 	display: flex;
 	gap: 8px;
 	margin-top: 8px;
 }
 
-.oc-btn {
+.ocs-btn {
 	border: 1px solid var(--background-modifier-border);
 	background: var(--background-primary);
 	color: var(--text-normal);
@@ -355,26 +355,26 @@
 	cursor: pointer;
 }
 
-.oc-btn:hover {
+.ocs-btn:hover {
 	background: var(--background-modifier-hover);
 }
 
-.oc-btn.oc-accept {
+.ocs-btn.ocs-accept {
 	border-color: var(--text-accent);
 }
 
-.oc-btn.oc-selected {
+.ocs-btn.ocs-selected {
 	background: var(--text-accent);
 	color: var(--text-on-accent);
 }
 
-.oc-field-label {
+.ocs-field-label {
 	font-size: 12px;
 	font-weight: 600;
 	margin: 6px 0 2px;
 }
 
-.oc-field-input {
+.ocs-field-input {
 	width: 100%;
 	background: var(--background-primary);
 	border: 1px solid var(--background-modifier-border);
@@ -383,7 +383,7 @@
 	color: var(--text-normal);
 }
 
-.oc-options {
+.ocs-options {
 	display: flex;
 	flex-wrap: wrap;
 	gap: 6px;
@@ -391,7 +391,7 @@
 }
 
 /* ---- history panel ---- */
-.oc-history-menu {
+.ocs-history-menu {
 	position: absolute;
 	top: 44px;
 	right: 8px;
@@ -407,11 +407,11 @@
 	box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
 }
 
-.oc-history-menu.oc-hidden {
+.ocs-history-menu.ocs-hidden {
 	display: none;
 }
 
-.oc-history-head {
+.ocs-history-head {
 	display: flex;
 	align-items: center;
 	gap: 4px;
@@ -419,13 +419,13 @@
 	border-bottom: 1px solid var(--background-modifier-border);
 }
 
-.oc-history-title {
+.ocs-history-title {
 	flex: 1;
 	font-weight: 700;
 	font-size: 12px;
 }
 
-.oc-history-search {
+.ocs-history-search {
 	margin: 8px 10px 4px;
 	background: var(--background-primary);
 	border: 1px solid var(--background-modifier-border);
@@ -434,7 +434,7 @@
 	color: var(--text-normal);
 }
 
-.oc-history-list {
+.ocs-history-list {
 	overflow-y: auto;
 	padding: 4px 6px 10px;
 	display: flex;
@@ -442,18 +442,18 @@
 	gap: 2px;
 }
 
-.oc-history-row {
+.ocs-history-row {
 	display: flex;
 	align-items: center;
 	gap: 4px;
 	border-radius: 8px;
 }
 
-.oc-history-row:hover {
+.ocs-history-row:hover {
 	background: var(--background-modifier-hover);
 }
 
-.oc-history-main {
+.ocs-history-main {
 	flex: 1;
 	text-align: left;
 	background: transparent;
@@ -464,26 +464,26 @@
 	min-width: 0;
 }
 
-.oc-history-name {
+.ocs-history-name {
 	font-weight: 600;
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
 }
 
-.oc-history-sub {
+.ocs-history-sub {
 	font-size: 11px;
 	color: var(--text-muted);
 }
 
-.oc-history-empty {
+.ocs-history-empty {
 	padding: 16px;
 	color: var(--text-muted);
 	text-align: center;
 }
 
 /* ---- composer ---- */
-.oc-composer {
+.ocs-composer {
 	border-top: 1px solid var(--background-modifier-border);
 	padding: 8px;
 	background: var(--background-secondary);
@@ -492,16 +492,16 @@
 	gap: 6px;
 }
 
-.oc-composer-controls {
+.ocs-composer-controls {
 	display: flex;
 	gap: 6px;
 	align-items: center;
 	flex-wrap: wrap;
 }
 
-.oc-model-selector,
-.oc-mode-selector,
-.oc-thinking-selector {
+.ocs-model-selector,
+.ocs-mode-selector,
+.ocs-thinking-selector {
 	background: var(--background-primary);
 	border: 1px solid var(--background-modifier-border);
 	border-radius: 8px;
@@ -511,7 +511,7 @@
 	max-width: 220px;
 }
 
-.oc-permission-toggle {
+.ocs-permission-toggle {
 	border: 1px solid var(--background-modifier-border);
 	background: var(--background-primary);
 	color: var(--text-muted);
@@ -521,18 +521,18 @@
 	font-size: 12px;
 }
 
-.oc-permission-toggle.oc-auto {
+.ocs-permission-toggle.ocs-auto {
 	border-color: var(--text-warning, orange);
 	color: var(--text-warning, orange);
 }
 
-.oc-composer-input-row {
+.ocs-composer-input-row {
 	display: flex;
 	gap: 8px;
 	align-items: flex-end;
 }
 
-.oc-input {
+.ocs-input {
 	flex: 1;
 	background: var(--background-primary);
 	border: 1px solid var(--background-modifier-border);
@@ -545,12 +545,12 @@
 	font-size: 13px;
 }
 
-.oc-input:focus {
+.ocs-input:focus {
 	outline: none;
 	border-color: var(--text-accent);
 }
 
-.oc-send-btn {
+.ocs-send-btn {
 	border: 1px solid var(--text-accent);
 	background: var(--text-accent);
 	color: var(--text-on-accent);
@@ -560,7 +560,7 @@
 	font-weight: 600;
 }
 
-.oc-status-line {
+.ocs-status-line {
 	font-size: 10px;
 	color: var(--text-faint);
 	white-space: nowrap;
@@ -568,11 +568,48 @@
 	text-overflow: ellipsis;
 }
 
-@keyframes oc-pulse {
+@keyframes ocs-pulse {
 	from {
 		opacity: 0.4;
 	}
 	to {
 		opacity: 1;
 	}
+}
+
+/* ---- connection banner + queue ---- */
+.ocs-connect-banner {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 6px 12px;
+	background: var(--background-secondary);
+	border-bottom: 1px solid var(--background-modifier-border);
+	color: var(--text-muted);
+	font-size: 12px;
+}
+
+.ocs-connect-banner.ocs-hidden {
+	display: none;
+}
+
+.ocs-spinner {
+	width: 12px;
+	height: 12px;
+	border-radius: 50%;
+	border: 2px solid var(--background-modifier-border);
+	border-top-color: var(--text-accent);
+	animation: ocs-spin 0.8s linear infinite;
+	flex-shrink: 0;
+}
+
+@keyframes ocs-spin {
+	to {
+		transform: rotate(360deg);
+	}
+}
+
+.ocs-msg.ocs-queued {
+	opacity: 0.65;
+	border-style: dashed;
 }

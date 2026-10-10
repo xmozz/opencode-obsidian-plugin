@@ -1,6 +1,6 @@
 import { Plugin, WorkspaceLeaf, Notice, PluginSettingTab, Setting } from "obsidian";
 import { DEFAULT_SETTINGS, type PluginSettings } from "./settings";
-import { connectShared, describeConnectionError, type Connection } from "./opencode/connection";
+import { connectShared, describeConnectionError, getLastAttempt, type Connection } from "./opencode/connection";
 import { OpenCodeChatView, VIEW_TYPE_OPENCODE } from "./ui/chat-view";
 import type { OpenCodeClient } from "@opencode/client";
 
@@ -94,6 +94,10 @@ export default class OpenCodePlugin extends Plugin {
 		return (leaves[0]?.view as OpenCodeChatView | undefined) ?? null;
 	}
 
+	isConnecting(): boolean {
+		return this.connecting;
+	}
+
 	async activateView(): Promise<void> {
 		const { workspace } = this.app;
 		let leaf: WorkspaceLeaf | null = null;
@@ -111,6 +115,7 @@ export default class OpenCodePlugin extends Plugin {
 	async ensureConnected(quiet = false): Promise<boolean> {
 		if (this.client || this.connecting) return this.client !== null;
 		this.connecting = true;
+		this.chatView()?.setConnecting(true, "opencode is starting…");
 		try {
 			const conn: Connection = await connectShared(
 				this.settings.opencodeBin,
@@ -118,8 +123,10 @@ export default class OpenCodePlugin extends Plugin {
 				(line) => {
 					const view = this.chatView() as unknown as {
 						setStatus?: (s: string) => void;
+						setConnecting?: (active: boolean, detail?: string) => void;
 					} | null;
 					view?.setStatus?.(line);
+					view?.setConnecting?.(true, line);
 				},
 			);
 			this.client = conn.client;
@@ -135,7 +142,9 @@ export default class OpenCodePlugin extends Plugin {
 			}
 			const view = this.chatView() as unknown as {
 				setStatus?: (s: string) => void;
+				setConnecting?: (active: boolean, detail?: string) => void;
 			} | null;
+			view?.setConnecting?.(false);
 			view?.setStatus?.(`Not connected: ${describeConnectionError(e)}`);
 			return false;
 		} finally {
@@ -225,6 +234,30 @@ class OpenCodeSettingTab extends PluginSettingTab {
 					this.plugin.client = null;
 					const ok = await this.plugin.ensureConnected();
 					new Notice(ok ? "OpenCode reconnected" : "OpenCode reconnect failed");
+				}),
+			);
+		new Setting(containerEl)
+			.setName("Copy connection diagnostics")
+			.setDesc("Copies the last connection attempt (binary, log) for troubleshooting.")
+			.addButton((b) =>
+				b.setButtonText("Copy").onClick(async () => {
+					const attempt = getLastAttempt();
+					const text = JSON.stringify(
+						{
+							endpoint: this.plugin.endpointUrl || null,
+							connected: this.plugin.client !== null,
+							vaultDir: this.plugin.vaultDir(),
+							attempt,
+						},
+						null,
+						2,
+					);
+					try {
+						await navigator.clipboard.writeText(text);
+						new Notice("Diagnostics copied to clipboard");
+					} catch {
+						new Notice("Could not access clipboard");
+					}
 				}),
 			);
 	}

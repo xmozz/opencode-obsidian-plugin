@@ -1,6 +1,6 @@
 {
-	"id": "opencode-obsidian",
-	"name": "OpenCode",
+	"id": "opencode-sync",
+	"name": "OpenCode Sync",
 	"version": "0.1.1",
 	"minAppVersion": "1.13.0",
 	"description": "OpenCode agent chat in a Grimoire-style side panel. Sessions are native opencode sessions shared with the CLI — no extra conversation files.",
