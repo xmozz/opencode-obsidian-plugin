@@ -440,6 +440,13 @@ export class OpenCodeChatView extends ItemView {
 				t.title.length > 22 ? t.title.slice(0, 21) + "…" : t.title,
 			);
 			b.appendChild(label);
+			const close = el("span", "ocs-tab-close", "✕");
+			close.title = "Close tab";
+			close.onclick = (e) => {
+				e.stopPropagation();
+				this.closeTab(t.tabId);
+			};
+			b.appendChild(close);
 			b.onclick = () => {
 				this.activeTabId = t.tabId;
 				t.attention = false;
@@ -447,8 +454,12 @@ export class OpenCodeChatView extends ItemView {
 				this.renderContent();
 				this.persistTabs();
 			};
-			b.onauxclick = (e) => {
-				if ((e as MouseEvent).button === 1) this.closeTab(t.tabId);
+			b.onmousedown = (e) => {
+				// Middle-click closes (preventDefault also kills autoscroll).
+				if ((e as MouseEvent).button === 1) {
+					e.preventDefault();
+					this.closeTab(t.tabId);
+				}
 			};
 			b.oncontextmenu = (e) => {
 				e.preventDefault();

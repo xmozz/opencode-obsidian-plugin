@@ -114,6 +114,21 @@
 	text-overflow: ellipsis;
 }
 
+.ocs-tab-close {
+	margin-left: 2px;
+	padding: 0 4px;
+	border-radius: 4px;
+	color: var(--text-faint);
+	font-size: calc(var(--ocs-fs, 13px) - 2px);
+	line-height: 1.4;
+	flex-shrink: 0;
+}
+
+.ocs-tab-close:hover {
+	background: var(--background-modifier-hover);
+	color: var(--text-normal);
+}
+
 .ocs-new-tab-btn,
 .ocs-icon-btn {
 	border: none;
