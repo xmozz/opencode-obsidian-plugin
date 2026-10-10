@@ -1,4 +1,4 @@
-import { ItemView, WorkspaceLeaf, Notice, Menu, MarkdownRenderer } from "obsidian";
+import { ItemView, WorkspaceLeaf, Notice, Menu, MarkdownRenderer, getIcon } from "obsidian";
 import type { OpenCodeClient } from "@opencode/client";
 import type OpenCodePlugin from "../main";
 import {
@@ -15,11 +15,14 @@ import {
 	runSessionCommand,
 	replyPermission,
 	ensureMathInstruction,
+	appendCurrentNote,
+	appendContextFiles,
 	parseUnifiedDiff,
 	countDiff,
 	type VaultSession,
 	type ChatMessage,
 } from "../opencode/sessions";
+import { FileAttachModal } from "./attach-modal";
 
 export const VIEW_TYPE_OPENCODE = "opencode-sync-chat";
 
@@ -32,6 +35,12 @@ interface TabState {
 	messages: ChatMessage[];
 	loaded: boolean;
 	usageText: string;
+	/** Vault-relative path of the auto/current note context (Grimoire-style). */
+	activeNote: string | null;
+	/** Manually attached vault-relative context files. */
+	contextFiles: string[];
+	/** True while the active note chip purely mirrors the focused file. */
+	autoAttached: boolean;
 }
 
 interface DiscoveredModel {
@@ -113,9 +122,14 @@ export class OpenCodeChatView extends ItemView {
 	private composerText!: HTMLTextAreaElement;
 	private modelSelect!: HTMLSelectElement;
 	private agentSelect!: HTMLSelectElement;
-	private variantSelect!: HTMLSelectElement;
-	private approveBtn!: HTMLButtonElement;
+	private effortBtn!: HTMLButtonElement;
+	private variantOptions: string[] = [];
+	private restrictBtn!: HTMLButtonElement;
+	private attachBtn!: HTMLButtonElement;
+	private forkBtn!: HTMLButtonElement;
+	private moreBtn!: HTMLButtonElement;
 	private sendBtn!: HTMLButtonElement;
+	private chipsRow!: HTMLElement;
 	private usageBadge!: HTMLElement;
 	private statusLine!: HTMLElement;
 	private connectBanner!: HTMLElement;
@@ -154,6 +168,7 @@ export class OpenCodeChatView extends ItemView {
 		this.applyFontSize();
 		this.buildShell();
 		this.restoreTabs();
+		this.autoAttachOnOpen();
 		if (!this.plugin.client) {
 			this.setConnecting(true, this.plugin.isConnecting() ? "opencode is starting…" : "opencode has not started yet — starting…");
 			// Nudge the plugin to connect (e.g. after reload while starting).
@@ -162,6 +177,20 @@ export class OpenCodeChatView extends ItemView {
 		void this.refreshCatalogs();
 		this.startEventLoop();
 		if (this.plugin.settings.refreshOnOpen) void this.refreshHistory();
+		this.registerEvent(
+			this.app.workspace.on("active-leaf-change", () => this.syncActiveNote()),
+		);
+	}
+
+	/** Default: the focused file is attached when the chat starts. */
+	private autoAttachOnOpen(): void {
+		const tab = this.activeTab();
+		if (!tab) return;
+		if (!tab.activeNote && tab.contextFiles.length === 0) {
+			this.autoAttachActiveFile(tab);
+		}
+		this.renderChips();
+		this.persistTabs();
 	}
 
 	async onClose(): Promise<void> {
@@ -219,45 +248,63 @@ export class OpenCodeChatView extends ItemView {
 		this.historyPanel = el("aside", "ocs-history-menu ocs-hidden");
 		shell.appendChild(this.historyPanel);
 
-		// composer
+		// composer: single Grimoire-style box — chips on top, input middle,
+		// model/agent/effort + icon actions in one bottom toolbar, no inner borders.
 		const composer = el("div", "ocs-composer");
 		shell.appendChild(composer);
-		const row1 = el("div", "ocs-composer-controls");
-		composer.appendChild(row1);
+
+		this.chipsRow = el("div", "ocs-chips-row");
+		composer.appendChild(this.chipsRow);
 
 		this.modelSelect = document.createElement("select");
-		this.modelSelect.className = "ocs-model-selector";
+		this.modelSelect.className = "ocs-model-selector ocs-model-pill";
 		this.modelSelect.title = "Model";
 		this.modelSelect.onchange = () => void this.onModelChanged();
-		row1.appendChild(this.modelSelect);
-
-		this.variantSelect = document.createElement("select");
-		this.variantSelect.className = "ocs-thinking-selector";
-		this.variantSelect.title = "Reasoning effort / variant";
-		this.variantSelect.onchange = () => void this.onVariantChanged();
-		row1.appendChild(this.variantSelect);
 
 		this.agentSelect = document.createElement("select");
 		this.agentSelect.className = "ocs-mode-selector";
-		this.agentSelect.title = "Agent / permission mode";
+		this.agentSelect.title = "Agent";
 		this.agentSelect.onchange = () => void this.onAgentChanged();
-		row1.appendChild(this.agentSelect);
 
-		this.approveBtn = el("button", "ocs-permission-toggle", "Safe");
-		this.approveBtn.title = "Toggle auto-approve permissions";
-		this.approveBtn.onclick = () => {
+		this.effortBtn = el("button", "ocs-icon-btn ocs-effort-btn", "");
+		this.effortBtn.onclick = () => this.cycleEffort();
+
+		this.moreBtn = el("button", "ocs-icon-btn", "");
+		setIconOrText(this.moreBtn, "ellipsis", "⋯", "More actions");
+		this.moreBtn.onclick = (e) => this.openComposerMenu(e as MouseEvent);
+
+		this.attachBtn = el("button", "ocs-icon-btn", "");
+		setIconOrText(this.attachBtn, "paperclip", "📎", "Attach vault file");
+		this.attachBtn.onclick = () => this.openAttachPicker();
+
+		this.restrictBtn = el("button", "ocs-icon-btn", "");
+		this.restrictBtn.onclick = () => {
 			this.plugin.settings.autoApprove = !this.plugin.settings.autoApprove;
 			void this.plugin.saveSettings();
 			this.renderApproveBtn();
 		};
-		row1.appendChild(this.approveBtn);
 
-		const row2 = el("div", "ocs-composer-input-row");
-		composer.appendChild(row2);
+		this.forkBtn = el("button", "ocs-icon-btn", "");
+		setIconOrText(this.forkBtn, "git-fork", "⑂", "Fork session");
+		this.forkBtn.onclick = () => void this.forkActive();
+
+		const toolbar = el("div", "ocs-toolbar");
+		composer.appendChild(toolbar);
+		const left = el("div", "ocs-toolbar-left");
+		toolbar.appendChild(left);
+		left.appendChild(this.modelSelect);
+		left.appendChild(this.agentSelect);
+		left.appendChild(this.effortBtn);
+		left.appendChild(this.moreBtn);
+		const right = el("div", "ocs-toolbar-right");
+		toolbar.appendChild(right);
+		right.appendChild(this.attachBtn);
+		right.appendChild(this.restrictBtn);
+		right.appendChild(this.forkBtn);
 		this.composerText = document.createElement("textarea");
 		this.composerText.className = "ocs-input";
 		this.composerText.placeholder =
-			"Ask OpenCode…  (/session, /new, /compact, /fork, Enter to send)";
+			"Ask OpenCode…  (/ for commands, Enter to send)";
 		this.composerText.rows = 3;
 		this.composerText.onkeydown = (e) => {
 			if (this.slashOpen) {
@@ -294,14 +341,15 @@ export class OpenCodeChatView extends ItemView {
 		this.composerText.oninput = () => {
 			this.updateSlashMenu();
 		};
-		row2.appendChild(this.composerText);
-		this.sendBtn = el("button", "ocs-send-btn", "Send");
+		composer.appendChild(this.composerText);
+		this.sendBtn = el("button", "ocs-send-btn", "");
+		setIconOrText(this.sendBtn, "arrow-up", "↑", "Send");
 		this.sendBtn.onclick = () => {
 			const tab = this.activeTab();
 			if (tab?.streaming) void this.stopCurrent();
 			else void this.sendCurrent();
 		};
-		row2.appendChild(this.sendBtn);
+		right.appendChild(this.sendBtn);
 
 		// Slash command menu (anchored above the composer)
 		this.slashMenu = el("div", "ocs-slash-menu ocs-hidden");
@@ -312,13 +360,36 @@ export class OpenCodeChatView extends ItemView {
 		this.statusLine = el("div", "ocs-status-line", "Not connected");
 		statusRow.appendChild(this.statusLine);
 
+		// Order inside the single box: chips, input, toolbar, popups, status.
+		composer.appendChild(this.chipsRow);
+		composer.appendChild(this.composerText);
+		composer.appendChild(toolbar);
+		composer.appendChild(this.slashMenu);
+		composer.appendChild(statusRow);
+
 		this.renderApproveBtn();
+	}
+
+	private renderSendBtn(): void {
+		const streaming = this.activeTab()?.streaming ?? false;
+		setIconOrText(
+			this.sendBtn,
+			streaming ? "square" : "arrow-up",
+			streaming ? "■" : "↑",
+			streaming ? "Stop" : "Send",
+		);
+		this.sendBtn.classList.toggle("ocs-busy", streaming);
 	}
 
 	private renderApproveBtn(): void {
 		const auto = this.plugin.settings.autoApprove;
-		this.approveBtn.textContent = auto ? "Auto-approve" : "Safe";
-		this.approveBtn.classList.toggle("ocs-auto", auto);
+		setIconOrText(
+			this.restrictBtn,
+			auto ? "shield-check" : "shield",
+			auto ? "Auto" : "Safe",
+			auto ? "Auto-approve: permissions are accepted automatically" : "Safe: ask before edits and commands",
+		);
+		this.restrictBtn.classList.toggle("ocs-auto", auto);
 	}
 
 	// ---------- tabs (UI-only; sessions live in opencode, not in files) ----------
@@ -329,6 +400,8 @@ export class OpenCodeChatView extends ItemView {
 			openTabs: this.tabs.map((t) => ({
 				sessionId: t.sessionId,
 				title: t.title,
+				activeNote: t.activeNote,
+				contextFiles: t.contextFiles,
 			})),
 			activeSessionId: this.activeTab()?.sessionId ?? null,
 		});
@@ -336,7 +409,12 @@ export class OpenCodeChatView extends ItemView {
 
 	private restoreTabs(): void {
 		const data = (this.plugin.loadedData ?? {}) as {
-			openTabs?: { sessionId: string; title: string }[];
+			openTabs?: {
+				sessionId: string;
+				title: string;
+				activeNote?: string | null;
+				contextFiles?: string[];
+			}[];
 		};
 		const open = data.openTabs ?? [];
 		this.tabs = [];
@@ -355,12 +433,16 @@ export class OpenCodeChatView extends ItemView {
 				messages: [],
 				loaded: false,
 				usageText: "",
+				activeNote: o.activeNote ?? null,
+				contextFiles: Array.isArray(o.contextFiles) ? o.contextFiles : [],
+				autoAttached: false,
 			};
 			this.tabs.push(tab);
 			if (!this.activeTabId) this.activeTabId = tab.tabId;
 		}
 		this.renderTabs();
 		this.renderContent();
+		this.renderChips();
 		for (const t of this.tabs) void this.ensureLoaded(t);
 	}
 
@@ -413,11 +495,16 @@ export class OpenCodeChatView extends ItemView {
 			messages: [],
 			loaded: false,
 			usageText: "",
+			activeNote: null,
+			contextFiles: [],
+			autoAttached: false,
 		};
 		this.tabs.push(tab);
 		this.activeTabId = tab.tabId;
+		this.autoAttachActiveFile(tab);
 		this.renderTabs();
 		this.renderContent();
+		this.renderChips();
 		this.persistTabs();
 		if (sid) void this.ensureLoaded(tab);
 	}
@@ -523,6 +610,153 @@ export class OpenCodeChatView extends ItemView {
 		});
 	}
 
+	// ---------- file context (Grimoire-style chips) ----------
+
+	/** Currently focused markdown file, vault-relative, if auto-attach applies. */
+	private focusedNotePath(): string | null {
+		if (!this.plugin.settings.autoAttachActiveFile) return null;
+		const file = this.app.workspace.getActiveFile();
+		if (!file || file.extension !== "md") return null;
+		return file.path;
+	}
+
+	/** Attach the focused file to a fresh tab (default behavior, like Grimoire). */
+	private autoAttachActiveFile(tab: TabState): void {
+		const note = this.focusedNotePath();
+		if (note) {
+			tab.activeNote = note;
+			tab.autoAttached = true;
+		}
+	}
+
+	/** Keep the auto-attached chip mirroring the focused file. */
+	private syncActiveNote(): void {
+		if (!this.plugin.settings.autoAttachActiveFile) return;
+		const tab = this.activeTab();
+		if (!tab || !tab.autoAttached) return;
+		const note = this.focusedNotePath();
+		if (note !== tab.activeNote) {
+			tab.activeNote = note;
+			this.renderChips();
+			this.persistTabs();
+		}
+	}
+
+	private attachFile(path: string): void {
+		const tab = this.activeTab();
+		if (!tab) return;
+		tab.autoAttached = false;
+		if (!tab.contextFiles.includes(path) && tab.activeNote !== path) {
+			tab.contextFiles.push(path);
+		}
+		this.renderChips();
+		this.persistTabs();
+	}
+
+	private detachActiveNote(): void {
+		const tab = this.activeTab();
+		if (!tab) return;
+		tab.activeNote = null;
+		tab.autoAttached = false;
+		this.renderChips();
+		this.persistTabs();
+	}
+
+	private detachContextFile(path: string): void {
+		const tab = this.activeTab();
+		if (!tab) return;
+		tab.contextFiles = tab.contextFiles.filter((f) => f !== path);
+		tab.autoAttached = false;
+		this.renderChips();
+		this.persistTabs();
+	}
+
+	private openAttachPicker(): void {
+		new FileAttachModal(this.app, (path) => this.attachFile(path)).open();
+	}
+
+	private renderChips(): void {
+		this.chipsRow.empty();
+		const tab = this.activeTab();
+		if (tab?.activeNote) {
+			this.chipsRow.appendChild(this.chip(tab.activeNote, true));
+		}
+		for (const f of tab?.contextFiles ?? []) {
+			this.chipsRow.appendChild(this.chip(f, false));
+		}
+		const add = el("button", "ocs-chip-add", "+ Add");
+		add.title = "Attach vault file";
+		add.onclick = () => this.openAttachPicker();
+		this.chipsRow.appendChild(add);
+		const more = el("button", "ocs-icon-btn", "");
+		setIconOrText(more, "ellipsis", "⋯", "Context options");
+		more.onclick = (e) => {
+			const menu = new Menu();
+			menu.addItem((i) =>
+				i.setTitle("Attach current note").onClick(() => {
+					const note = this.app.workspace.getActiveFile();
+					if (note && note.extension === "md") {
+						const t = this.activeTab();
+						if (t) {
+							t.activeNote = note.path;
+							t.autoAttached = false;
+							this.renderChips();
+							this.persistTabs();
+						}
+					} else {
+						new Notice("No markdown file focused");
+					}
+				}),
+			);
+			menu.addItem((i) =>
+				i.setTitle("Clear attached files").onClick(() => {
+					const t = this.activeTab();
+					if (t) {
+						t.activeNote = null;
+						t.contextFiles = [];
+						t.autoAttached = false;
+						this.renderChips();
+						this.persistTabs();
+					}
+				}),
+			);
+			menu.showAtMouseEvent(e as MouseEvent);
+		};
+		this.chipsRow.appendChild(more);
+	}
+
+	private chip(path: string, isActiveNote: boolean): HTMLElement {
+		const chip = el("span", `ocs-chip${isActiveNote ? " ocs-chip-note" : ""}`);
+		chip.title = path;
+		const base = path.split("/").pop() ?? path;
+		chip.appendChild(el("span", "ocs-chip-name", base));
+		const x = el("button", "ocs-chip-x", "×");
+		x.title = "Remove";
+		x.onclick = () => {
+			if (isActiveNote) this.detachActiveNote();
+			else this.detachContextFile(path);
+		};
+		chip.appendChild(x);
+		return chip;
+	}
+
+	private openComposerMenu(e: MouseEvent): void {
+		const menu = new Menu();
+		menu.addItem((i) =>
+			i.setTitle("Fork session").onClick(() => void this.forkActive()),
+		);
+		menu.addItem((i) =>
+			i.setTitle("Rename session").onClick(() => void this.renameActive()),
+		);
+		menu.addItem((i) =>
+			i.setTitle("Reload messages").onClick(() => void this.reloadActive()),
+		);
+		menu.addItem((i) =>
+			i.setTitle("Delete session (opencode)").onClick(() => void this.deleteActive()),
+		);
+		menu.showAtMouseEvent(e);
+	}
+
 	// ---------- messages ----------
 
 	/** Applies the configured base font size (all UI text scales with it). */
@@ -536,18 +770,19 @@ export class OpenCodeChatView extends ItemView {
 		this.connectBanner.classList.toggle("ocs-hidden", !active);
 		if (detail) this.connectDetail.textContent = detail;
 		else if (active) this.connectDetail.textContent = "opencode is starting…";
-		this.sendBtn.textContent = this.activeTab()?.streaming ? "Stop" : "Send";
+		this.renderSendBtn();
 	}
 
 	private renderContent(): void {
 		this.content.empty();
+		this.renderChips();
 		const tab = this.activeTab();
 		if (!tab) {
 			this.content.appendChild(el("div", "ocs-empty", "Open a session tab to start."));
-			this.sendBtn.textContent = "Send";
+			this.renderSendBtn();
 			return;
 		}
-		this.sendBtn.textContent = tab.streaming ? "Stop" : "Send";
+		this.renderSendBtn();
 		const list = el("div", "ocs-message-list");
 		this.content.appendChild(list);
 		if (!tab.loaded) {
@@ -779,12 +1014,13 @@ export class OpenCodeChatView extends ItemView {
 		}
 	}
 
-	private async onVariantChanged(): Promise<void> {
+	private async onVariantChanged(value?: string): Promise<void> {
 		const tab = this.activeTab();
 		const client = this.plugin.client;
 		const ref = this.selectedModelRef();
-		this.plugin.settings.variant = this.variantSelect.value;
+		if (value !== undefined) this.plugin.settings.variant = value;
 		void this.plugin.saveSettings();
+		this.renderEffortBtn();
 		if (tab && client && ref && tab.sessionId && !tab.sessionId.startsWith("pending-")) {
 			try {
 				await switchModel(
@@ -792,12 +1028,19 @@ export class OpenCodeChatView extends ItemView {
 					tab.sessionId,
 					ref.providerID,
 					ref.id,
-					this.variantSelect.value,
+					this.plugin.settings.variant,
 				);
 			} catch (e) {
 				new Notice(`Variant switch failed: ${errMsg(e)}`);
 			}
 		}
+	}
+
+	/** Cycle to the next reasoning effort tier. */
+	private cycleEffort(): void {
+		const opts = this.variantOptions.length > 0 ? this.variantOptions : ["default"];
+		const cur = opts.indexOf(this.plugin.settings.variant);
+		void this.onVariantChanged(opts[(cur + 1) % opts.length]);
 	}
 
 	private async onAgentChanged(): Promise<void> {
@@ -896,7 +1139,7 @@ export class OpenCodeChatView extends ItemView {
 			this.composerText.value = raw;
 			return;
 		}
-		// optimistic user bubble
+		// optimistic user bubble (clean text; context travels in the prompt only)
 		tab.messages.push({
 			id: `local-${Date.now()}`,
 			role: "user",
@@ -908,8 +1151,13 @@ export class OpenCodeChatView extends ItemView {
 		tab.streaming = true;
 		this.renderTabs();
 		this.renderContent();
+		// Active note + attached files, Grimoire-style XML suffix (server-side only).
+		let text = raw;
+		if (tab.activeNote) text = appendCurrentNote(text, tab.activeNote);
+		const extra = tab.contextFiles.filter((f) => f !== tab.activeNote);
+		if (extra.length > 0) text = appendContextFiles(text, extra);
 		try {
-			await sendPrompt(client, tab.sessionId, raw);
+			await sendPrompt(client, tab.sessionId, text);
 		} catch (e) {
 			tab.streaming = false;
 			tab.messages.push({
@@ -1152,20 +1400,22 @@ export class OpenCodeChatView extends ItemView {
 	}
 
 	private renderVariantOptions(): void {
-		const sel = this.variantSelect;
-		sel.empty();
 		const ref = this.selectedModelRef();
 		const m = this.models.find(
 			(x) => ref && x.providerID === ref.providerID && x.id === ref.id,
 		);
-		const variants = ["default", ...(m?.variants ?? []).filter((v) => v !== "default")];
-		for (const v of variants) {
-			const opt = document.createElement("option");
-			opt.value = v;
-			opt.textContent = v === "default" ? "Effort: default" : `Effort: ${v}`;
-			if (v === this.plugin.settings.variant) opt.selected = true;
-			sel.appendChild(opt);
+		this.variantOptions = ["default", ...(m?.variants ?? []).filter((v) => v !== "default")];
+		if (!this.variantOptions.includes(this.plugin.settings.variant)) {
+			this.plugin.settings.variant = this.variantOptions[0];
+			void this.plugin.saveSettings();
 		}
+		this.renderEffortBtn();
+	}
+
+	private renderEffortBtn(): void {
+		const v = this.plugin.settings.variant || "default";
+		this.effortBtn.textContent = v === "default" ? "Auto" : v;
+		this.effortBtn.title = `Reasoning effort: ${v} (click to cycle)`;
 	}
 
 	private renderAgentOptions(): void {
@@ -1418,7 +1668,7 @@ export class OpenCodeChatView extends ItemView {
 					this.ensureLiveAssistant(tab);
 					if (tab.tabId === this.activeTabId) {
 						this.renderTabs();
-						this.sendBtn.textContent = "Stop";
+						this.renderSendBtn();
 					} else this.renderTabs();
 				}
 				break;
@@ -1742,4 +1992,14 @@ function summarizeInput(input: Record<string, unknown>): string {
 
 function cssEsc(s: string): string {
 	return s.replace(/["\\]/g, "\\$&");
+}
+
+/** Lucide icon with a text fallback when the icon set lacks the name. */
+function setIconOrText(btn: HTMLElement, icon: string, fallback: string, title: string): void {
+	btn.empty();
+	const svg = getIcon(icon);
+	if (svg) btn.appendChild(svg);
+	else btn.textContent = fallback;
+	btn.setAttribute("aria-label", title);
+	btn.title = title;
 }

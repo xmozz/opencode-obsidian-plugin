@@ -8,6 +8,7 @@ export interface PluginSettings {
 	maxTabs: number;
 	fontSize: number;
 	latexHint: boolean;
+	autoAttachActiveFile: boolean;
 	sendWithButtonOnly: boolean;
 	refreshOnOpen: boolean;
 }
@@ -22,6 +23,7 @@ export const DEFAULT_SETTINGS: PluginSettings = {
 	maxTabs: 10,
 	fontSize: 13,
 	latexHint: true,
+	autoAttachActiveFile: true,
 	sendWithButtonOnly: false,
 	refreshOnOpen: true,
 };

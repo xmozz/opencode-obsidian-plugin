@@ -225,6 +225,15 @@ class OpenCodeSettingTab extends PluginSettingTab {
 				}),
 			);
 		new Setting(containerEl)
+			.setName("Auto-attach focused file")
+			.setDesc("Automatically attach the focused markdown file as context when the chat starts, like Grimoire.")
+			.addToggle((t) =>
+				t.setValue(this.plugin.settings.autoAttachActiveFile).onChange(async (v) => {
+					this.plugin.settings.autoAttachActiveFile = v;
+					await this.plugin.saveSettings();
+				}),
+			);
+		new Setting(containerEl)
 			.setName("Max tabs")
 			.addSlider((s) =>
 				s.setLimits(1, 20, 1).setValue(this.plugin.settings.maxTabs).onChange(async (v) => {

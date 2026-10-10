@@ -178,9 +178,9 @@ function parseMessage(m: AnyRecord): ChatMessage[] {
 	const type = m.type as string;
 	const ts = Number(m.time?.created ?? Date.now());
 	if (type === "user") {
-		const text = String(
-			m.text ?? m.metadata?.displayText ?? "",
-		).trim();
+		const text = stripXmlContext(
+			String(m.text ?? m.metadata?.displayText ?? "").trim(),
+		);
 		if (!text) return [];
 		return [
 			{
@@ -315,6 +315,44 @@ function mapStatus(status: unknown): string {
 	if (status === "running" || status === "pending") return "running";
 	if (status === "error" || status === "failed") return "error";
 	return "completed";
+}
+
+/**
+ * Context-block format adapted 1:1 from Grimoire (MIT, (c) Michael Makarov):
+ * user text first, `<current_note>` / `<context_files>` XML appended after.
+ * Same for the display-stripping pattern below.
+ */
+const CURRENT_NOTE_TARGET_HINT =
+	"Default target: If the user asks to edit, rewrite, update, or apply instructions without naming another target file, use this note as the target file.";
+
+export function appendCurrentNote(prompt: string, notePath: string): string {
+	return `${prompt}\n\n${["<current_note>", notePath, CURRENT_NOTE_TARGET_HINT, "</current_note>"].join("\n")}`;
+}
+
+export function appendContextFiles(prompt: string, files: string[]): string {
+	const fileLines = files.map((file) => `- ${file}`).join("\n");
+	return `${prompt}\n\n${[
+		"<context_files>",
+		"The user selected these files as active context.",
+		"Inspect the relevant selected files before answering broad or deictic requests.",
+		"Do not ignore these files just because the user did not name them explicitly in the message.",
+		"",
+		fileLines,
+		"</context_files>",
+	].join("\n")}`;
+}
+
+const XML_CONTEXT_SUFFIX =
+	/\n\n<(?:current_note|editor_selection|editor_cursor|context_files|excluded_folders|canvas_selection|browser_selection|vault_search|project_workspace)[\s>][\s\S]*$/;
+
+/** Strips appended XML context blocks so history shows the clean user text. */
+export function stripXmlContext(text: string): string {
+	let out = text;
+	for (;;) {
+		const stripped = out.replace(XML_CONTEXT_SUFFIX, "").trimEnd();
+		if (stripped === out) return out;
+		out = stripped;
+	}
 }
 
 export async function sendPrompt(
