@@ -721,9 +721,20 @@ button.ocs-copy-btn:active {
 	white-space: nowrap;
 }
 
-.ocs-chip-x {
-	border: none;
-	background: transparent;
+.ocs-chip-x,
+.ocs-chip-x:hover,
+.ocs-chip-x:focus,
+.ocs-chip-x:focus-visible,
+.ocs-chip-x:active,
+button.ocs-chip-x,
+button.ocs-chip-x:hover,
+button.ocs-chip-x:focus,
+button.ocs-chip-x:active {
+	border: none !important;
+	background: transparent !important;
+	background-color: transparent !important;
+	box-shadow: none !important;
+	outline: none !important;
 	color: var(--text-faint);
 	cursor: pointer;
 	padding: 0 2px;
