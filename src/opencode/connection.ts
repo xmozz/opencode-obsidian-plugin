@@ -157,6 +157,44 @@ export function resolveBinary(configured: string): ResolvedBinary {
 	);
 }
 
+/** Directories that GUI-launched processes often miss but MCP servers need. */
+function extraPathDirs(): string[] {
+	const dirs: string[] = [];
+	const home = os.homedir();
+	if (process.platform === "win32") {
+		const appData = process.env.APPDATA ?? "";
+		const localApp = process.env.LOCALAPPDATA ?? "";
+		dirs.push(
+			path.join(appData, "npm"),
+			"C:\\Program Files\\nodejs",
+			"C:\\Program Files\\Git\\cmd",
+			path.join(localApp, "Programs", "Python", "Python313", "Scripts"),
+			"C:\\Windows\\System32",
+		);
+	} else {
+		dirs.push("/usr/local/bin", "/opt/homebrew/bin", path.join(home, ".local", "bin"));
+	}
+	return dirs.filter((d) => {
+		try {
+			return fs.existsSync(d);
+		} catch {
+			return false;
+		}
+	});
+}
+
+function enhancedPath(): string {
+	const current = (process.env.PATH ?? "").split(path.delimiter).filter(Boolean);
+	const seen = new Set(current.map((d) => d.toLowerCase()));
+	for (const dir of extraPathDirs()) {
+		if (!seen.has(dir.toLowerCase())) {
+			current.push(dir);
+			seen.add(dir.toLowerCase());
+		}
+	}
+	return current.join(path.delimiter);
+}
+
 /** Spawn `opencode serve --service` detached (shared with the CLI) and wait until discoverable. */
 async function spawnSharedService(
 	binary: string,
@@ -186,7 +224,9 @@ async function spawnSharedService(
 			detached: true,
 			windowsHide: true,
 			stdio: ["ignore", "ignore", "pipe"],
-			env: { ...process.env, ...extraEnv },
+			// GUI apps inherit a thin PATH; MCP stdio servers (npx, python…)
+			// would fail to resolve without the usual terminal locations.
+			env: { ...process.env, ...extraEnv, PATH: enhancedPath() },
 		});
 	} catch (cause) {
 		throw withDetails(

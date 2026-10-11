@@ -964,6 +964,41 @@ button.ocs-picker-btn:active {
 	gap: 8px;
 }
 
+/* ---- queued messages outbox ---- */
+.ocs-queue-bar {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	border: 1px dashed var(--text-accent);
+	border-radius: 8px;
+	padding: 6px 8px;
+	margin-bottom: 2px;
+}
+
+.ocs-queue-bar.ocs-hidden {
+	display: none;
+}
+
+.ocs-queue-head {
+	font-size: calc(var(--ocs-fs, 13px) - 2px);
+	color: var(--text-muted);
+}
+
+.ocs-queue-row {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+}
+
+.ocs-queue-text {
+	flex: 1;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	color: var(--text-normal);
+	opacity: 0.8;
+}
 /* ---- slash command menu ---- */
 .ocs-slash-menu {
 	position: absolute;

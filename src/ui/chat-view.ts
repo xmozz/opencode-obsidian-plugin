@@ -61,6 +61,18 @@ interface DiscoveredModel {
 	limit: number | null;
 }
 
+interface LiveToolState {
+	node: HTMLElement;
+	sumName: HTMLElement;
+	sumArg: HTMLElement;
+	inputPre: HTMLElement;
+	outPre: HTMLElement | null;
+	name: string;
+	inputText: string;
+	output: string;
+	status: string;
+}
+
 let tabCounter = 0;
 function newTabId(): string {
 	tabCounter += 1;
@@ -167,6 +179,9 @@ export class OpenCodeChatView extends ItemView {
 	private slashOpen = false;
 	private slashItems: Array<{ name: string; hint: string; takesArg: boolean }> = [];
 	private slashIndex = 0;
+	private queueBar!: HTMLElement;
+	private lastEsc = 0;
+	private liveTools = new Map<string, Map<string, LiveToolState>>();
 
 	constructor(leaf: WorkspaceLeaf, plugin: OpenCodePlugin) {
 		super(leaf);
@@ -277,6 +292,10 @@ export class OpenCodeChatView extends ItemView {
 		const composer = el("div", "ocs-composer");
 		shell.appendChild(composer);
 
+		// outbox bar: queued messages hover here until the agent is free
+		this.queueBar = el("div", "ocs-queue-bar ocs-hidden");
+		composer.appendChild(this.queueBar);
+
 		this.chipsRow = el("div", "ocs-chips-row");
 		composer.appendChild(this.chipsRow);
 
@@ -344,6 +363,22 @@ export class OpenCodeChatView extends ItemView {
 				if (e.key === "Escape") {
 					e.preventDefault();
 					this.closeSlashMenu();
+					return;
+				}
+			}
+			if (e.key === "Escape" && !e.shiftKey) {
+				// Double-Esc stops the agent (single Esc just arms).
+				const tab = this.activeTab();
+				if (tab?.streaming) {
+					e.preventDefault();
+					const now = Date.now();
+					if (now - this.lastEsc < 600) {
+						this.lastEsc = 0;
+						void this.stopCurrent();
+					} else {
+						this.lastEsc = now;
+						new Notice("Press Esc again to stop the agent");
+					}
 					return;
 				}
 			}
@@ -586,6 +621,9 @@ export class OpenCodeChatView extends ItemView {
 		const idx = this.tabs.findIndex((t) => t.tabId === tabId);
 		if (idx < 0) return;
 		this.tabs.splice(idx, 1);
+		// Queued messages never left the client — discard them with the tab.
+		this.queued = this.queued.filter((q) => q.tabId !== tabId);
+		this.renderQueueBar();
 		if (this.activeTabId === tabId) {
 			this.activeTabId = this.tabs[Math.max(0, idx - 1)]?.tabId ?? null;
 		}
@@ -907,6 +945,7 @@ export class OpenCodeChatView extends ItemView {
 	private renderContent(): void {
 		this.content.empty();
 		this.renderChips();
+		this.renderQueueBar();
 		const tab = this.activeTab();
 		if (!tab) {
 			this.content.appendChild(el("div", "ocs-empty", "Open a session tab to start."));
@@ -1261,30 +1300,79 @@ export class OpenCodeChatView extends ItemView {
 
 		const client = this.plugin.client;
 		if (!client || this.plugin.isConnecting()) {
-			this.queued.push({ tabId: tab.tabId, text: raw, ts: Date.now() });
-			this.renderContent();
-			new Notice("opencode is still starting — message queued, will send when ready.");
+			this.enqueue(tab, raw);
+			return;
+		}
+		if (tab.streaming) {
+			this.enqueue(tab, raw);
+			new Notice("Agent is working — message queued, sends automatically.");
 			return;
 		}
 		void this.dispatchText(tab, raw);
 	}
 
-	/** Sends queued messages (oldest first) once the service is ready. */
-	async flushQueue(): Promise<void> {
-		if (this.queued.length === 0) return;
-		const client = this.plugin.client;
-		if (!client) return;
-		const items = [...this.queued].sort((a, b) => a.ts - b.ts);
-		this.queued = [];
-		let sent = 0;
-		for (const q of items) {
-			const tab = this.tabs.find((t) => t.tabId === q.tabId) ?? this.activeTab();
-			if (!tab) continue;
-			sent++;
-			await this.dispatchText(tab, q.text);
-		}
+	private enqueue(tab: TabState, raw: string): void {
+		this.queued.push({ tabId: tab.tabId, text: raw, ts: Date.now() });
 		this.renderContent();
-		if (sent > 0) new Notice(`opencode is ready — ${sent} queued message${sent === 1 ? "" : "s"} sent.`);
+		if (!this.plugin.client || this.plugin.isConnecting()) {
+			new Notice("opencode is still starting — message queued, will send when ready.");
+		}
+	}
+
+	/** Sends queued messages once its tab is free (oldest first, one per tab). */
+	async flushQueue(): Promise<void> {
+		if (!this.plugin.client) return;
+		let sent = 0;
+		for (const tab of this.tabs) {
+			if (await this.flushQueueFor(tab)) sent++;
+		}
+		if (sent > 0) {
+			this.renderContent();
+			new Notice(`opencode is ready — ${sent} queued message${sent === 1 ? "" : "s"} sent.`);
+		}
+	}
+
+	private async flushQueueFor(tab: TabState): Promise<boolean> {
+		const client = this.plugin.client;
+		if (!client || tab.streaming) return false;
+		const idx = this.queued.findIndex((q) => q.tabId === tab.tabId);
+		if (idx < 0) return false;
+		const [item] = this.queued.splice(idx, 1);
+		this.renderQueueBar();
+		await this.dispatchText(tab, item.text);
+		return true;
+	}
+
+	/** Outbox bar hovering above the input field. */
+	private renderQueueBar(): void {
+		this.queueBar.empty();
+		const tab = this.activeTab();
+		const items = tab ? this.queuedFor(tab.tabId) : [];
+		if (items.length === 0) {
+			this.queueBar.classList.add("ocs-hidden");
+			return;
+		}
+		this.queueBar.classList.remove("ocs-hidden");
+		this.queueBar.appendChild(
+			el(
+				"div",
+				"ocs-queue-head",
+				`⏳ Queued (${items.length}) — sends automatically when the agent is done`,
+			),
+		);
+		for (const q of items) {
+			const row = el("div", "ocs-queue-row");
+			const preview = q.text.length > 80 ? `${q.text.slice(0, 79)}…` : q.text;
+			row.appendChild(el("span", "ocs-queue-text", preview));
+			const x = el("button", "ocs-chip-x", "×");
+			x.title = "Discard queued message";
+			x.onclick = () => {
+				this.queued = this.queued.filter((o) => o !== q);
+				this.renderQueueBar();
+			};
+			row.appendChild(x);
+			this.queueBar.appendChild(row);
+		}
 	}
 
 	private queuedFor(tabId: string): Array<{ tabId: string; text: string; ts: number }> {
@@ -1786,14 +1874,70 @@ export class OpenCodeChatView extends ItemView {
 	private async runEvents(signal: AbortSignal): Promise<void> {
 		const client = this.plugin.client;
 		if (!client) return;
-		try {
-			const stream = client.event.subscribe();
-			for await (const raw of stream) {
+		const subscribe = client.event.subscribe as unknown as (opts?: {
+			signal?: AbortSignal;
+		}) => AsyncIterable<Record<string, unknown>>;
+		let failures = 0;
+		while (!signal.aborted) {
+			try {
+				const stream = subscribe({ signal });
+				failures = 0;
+				for await (const raw of stream) {
+					if (signal.aborted) return;
+					this.handleEvent(raw);
+				}
+				// Server closed the stream cleanly (e.g. it restarted) —
+				// fall through to reconnect instead of dying silently.
+				failures++;
+				this.setStatus("Event stream closed by server, reconnecting…");
+			} catch (e) {
 				if (signal.aborted) return;
-				this.handleEvent(raw as Record<string, unknown>);
+				failures++;
+				this.setStatus(`Event stream lost (${errMsg(e)}), reconnecting…`);
 			}
-		} catch (e) {
-			if (!signal.aborted) this.setStatus(`Event stream ended: ${errMsg(e)}`);
+			if (signal.aborted) return;
+			await new Promise((r) => setTimeout(r, Math.min(1000 * failures, 10000)));
+			if (signal.aborted) return;
+			// Re-sync: turns that finished during the outage left no events.
+			void this.reconcileStreaming();
+		}
+	}
+
+	/**
+	 * Repairs stuck "working" tabs after an event outage: any tab whose
+	 * session already reached a terminal outcome is finalized locally,
+	 * then its queue flushes.
+	 */
+	private async reconcileStreaming(): Promise<void> {
+		const client = this.plugin.client;
+		if (!client) return;
+		for (const tab of this.tabs) {
+			if (!tab.streaming || tab.sessionId.startsWith("pending-")) continue;
+			try {
+				const info = (await client.session.get({
+					sessionID: tab.sessionId,
+				} as never)) as unknown as { outcome?: string };
+				if (
+					info.outcome === "succeeded" ||
+					info.outcome === "failed" ||
+					info.outcome === "interrupted"
+				) {
+					tab.streaming = false;
+					tab.loaded = false;
+					this.liveTools.delete(tab.sessionId);
+					if (tab.tabId === this.activeTabId) {
+						this.renderContent();
+						this.renderTabs();
+					} else {
+						tab.attention = true;
+						this.renderTabs();
+					}
+					void this.ensureLoaded(tab);
+					void this.flushQueueFor(tab);
+				}
+			} catch {
+				/* session may be gone; leave the tab as is */
+			}
 		}
 	}
 
@@ -1820,6 +1964,106 @@ export class OpenCodeChatView extends ItemView {
 			}
 		}
 		return live;
+	}
+
+	private liveToolState(sessionId: string, toolId: string): LiveToolState | undefined {
+		return this.liveTools.get(sessionId)?.get(toolId);
+	}
+
+	/** Creates (or updates) a live tool card — visible and expandable while running. */
+	private upsertLiveTool(
+		tab: TabState,
+		toolId: string,
+		patch: Partial<Pick<LiveToolState, "name" | "inputText" | "status" | "output">>,
+	): LiveToolState {
+		let map = this.liveTools.get(tab.sessionId);
+		if (!map) {
+			map = new Map();
+			this.liveTools.set(tab.sessionId, map);
+		}
+		let st = map.get(toolId);
+		if (!st) {
+			const live = this.ensureLiveAssistant(tab);
+			const node = document.createElement("details");
+			node.className = "ocs-toolcall ocs-running";
+			node.dataset.tool = toolId;
+			const sum = document.createElement("summary");
+			const dot = el("span", "ocs-tool-dot");
+			sum.appendChild(dot);
+			const sumName = el("span", "ocs-tool-name", "tool");
+			sum.appendChild(sumName);
+			const sumArg = el("span", "ocs-tool-arg", "");
+			sum.appendChild(sumArg);
+			node.appendChild(sum);
+			const inputPre = el("pre", "ocs-tool-input", "");
+			inputPre.style.display = "none";
+			node.appendChild(inputPre);
+			st = {
+				node,
+				sumName,
+				sumArg,
+				inputPre,
+				outPre: null,
+				name: "tool",
+				inputText: "",
+				output: "",
+				status: "running",
+			};
+			map.set(toolId, st);
+			live.appendChild(node);
+			const list = this.messageListEl();
+			if (list && tab.tabId === this.activeTabId) list.scrollTop = list.scrollHeight;
+		}
+		if (patch.name !== undefined) st.name = patch.name;
+		if (patch.inputText !== undefined) st.inputText = patch.inputText;
+		if (patch.status !== undefined) st.status = patch.status;
+		if (patch.output !== undefined) st.output = patch.output;
+		this.paintLiveTool(st);
+		return st;
+	}
+
+	private paintLiveTool(st: LiveToolState): void {
+		st.sumName.textContent = st.name;
+		let parsed: Record<string, unknown> | null = null;
+		if (st.inputText) {
+			try {
+				const v: unknown = JSON.parse(st.inputText);
+				if (v && typeof v === "object" && !Array.isArray(v)) {
+					parsed = v as Record<string, unknown>;
+				}
+			} catch {
+				parsed = null;
+			}
+		}
+		const rawPath =
+			(parsed && typeof parsed.path === "string" && parsed.path) ||
+			(parsed && typeof parsed.file === "string" && parsed.file) ||
+			"";
+		const base = rawPath ? String(rawPath).replace(/\\/g, "/").split("/").pop() ?? "" : "";
+		st.sumArg.textContent = base || (parsed ? summarizeInput(parsed) : st.inputText.slice(0, 80));
+		const pretty = parsed ? safeJson(parsed) : st.inputText;
+		if (pretty.trim()) {
+			st.inputPre.style.display = "";
+			if (st.inputPre.textContent !== pretty.slice(0, 2000)) {
+				st.inputPre.textContent = pretty.slice(0, 2000);
+			}
+		} else {
+			st.inputPre.style.display = "none";
+		}
+		st.node.classList.remove("ocs-running", "ocs-done", "ocs-error");
+		st.node.classList.add(
+			st.status === "completed" ? "ocs-done" : st.status === "error" ? "ocs-error" : "ocs-running",
+		);
+		if (st.output) {
+			if (!st.outPre) {
+				st.outPre = el("pre", "ocs-tool-output", "");
+				st.node.appendChild(st.outPre);
+			}
+			st.outPre.textContent = st.output.slice(0, 4000);
+		} else if (st.outPre) {
+			st.outPre.remove();
+			st.outPre = null;
+		}
 	}
 
 	private handleEvent(raw: Record<string, unknown>): void {
@@ -1886,6 +2130,7 @@ export class OpenCodeChatView extends ItemView {
 						this.liveAssistant.delete(tab.sessionId);
 						this.liveReasoning.delete(tab.sessionId);
 					}
+					this.liveTools.delete(tab.sessionId);
 					if (type === "session.execution.failed") {
 						const err = (data.error as { message?: string } | undefined)?.message;
 						if (err) {
@@ -1910,6 +2155,8 @@ export class OpenCodeChatView extends ItemView {
 					tab.loaded = false;
 					void this.ensureLoaded(tab);
 					void this.refreshHistory();
+					// A queued follow-up goes out now that the agent is free.
+					void this.flushQueueFor(tab);
 				}
 				break;
 			}
@@ -1953,29 +2200,38 @@ export class OpenCodeChatView extends ItemView {
 				}
 				break;
 			}
-			case "session.tool.input.started":
+			case "session.tool.input.started": {
+				if (tab) {
+					const id = String(data.id ?? "");
+					const name = String(data.name ?? "tool");
+					if (id) this.upsertLiveTool(tab, id, { name });
+				}
+				break;
+			}
+			case "session.tool.input.delta": {
+				if (tab) {
+					const id = String(data.id ?? "");
+					const st = id ? this.liveToolState(tab.sessionId, id) : undefined;
+					if (st) {
+						st.inputText += String(data.delta ?? "");
+						this.paintLiveTool(st);
+					}
+				}
+				break;
+			}
 			case "session.tool.called": {
 				if (tab) {
-					const live = this.ensureLiveAssistant(tab);
 					const id = String(data.id ?? "");
-					if (id && !live.querySelector(`[data-tool="${cssEsc(id)}"]`)) {
-						const tool = el("div", "ocs-toolcall ocs-running");
-						tool.dataset.tool = id;
-						const name = String(
-							(data as Record<string, unknown>).name ?? "tool",
-						);
+					if (id) {
 						const input = (data as Record<string, unknown>).input as
 							| Record<string, unknown>
 							| undefined;
-						const rawPath =
-							(typeof input?.path === "string" && input.path) ||
-							(typeof input?.file === "string" && input.file) ||
-							"";
-						const base = rawPath
-							? String(rawPath).replace(/\\/g, "/").split("/").pop()
-							: "";
-						tool.innerHTML = `<span class="ocs-tool-dot"></span><span class="ocs-tool-name">${escapeHtml(name)}</span>${base ? `<span class="ocs-tool-arg">${escapeHtml(base)}</span>` : ""}`;
-						live.appendChild(tool);
+						this.upsertLiveTool(tab, id, {
+							inputText:
+								input && typeof input === "object"
+									? JSON.stringify(input, null, 2)
+									: "",
+						});
 					}
 				}
 				break;
@@ -1983,15 +2239,28 @@ export class OpenCodeChatView extends ItemView {
 			case "session.tool.success":
 			case "session.tool.failed": {
 				if (tab) {
-					const live = this.liveAssistant.get(tab.sessionId);
-					const node = live?.querySelector(
-						`[data-tool="${cssEsc(String(data.id ?? ""))}"]`,
-					);
-					if (node) {
-						node.classList.remove("ocs-running");
-						node.classList.add(
-							type === "session.tool.success" ? "ocs-done" : "ocs-error",
-						);
+					const id = String(data.id ?? "");
+					const st = id ? this.liveToolState(tab.sessionId, id) : undefined;
+					if (st) {
+						const ok = type === "session.tool.success";
+						st.status = ok ? "completed" : "error";
+						if (!ok) {
+							const err = data.error as
+								| { message?: string; response?: { body?: string } }
+								| undefined;
+							const body =
+								typeof err?.message === "string" && err.message
+									? err.message
+									: typeof err?.response?.body === "string"
+										? err.response.body
+										: "";
+							st.output = [toolContentText(data.content), body]
+								.filter(Boolean)
+								.join("\n");
+						} else {
+							st.output = toolContentText(data.content);
+						}
+						this.paintLiveTool(st);
 					}
 				}
 				break;
@@ -2200,6 +2469,20 @@ function fmtTokens(n: number): string {
 
 function fmtCost(c: number): string {
 	return c.toFixed(4).replace(/0+$/, "").replace(/\.$/, ".0");
+}
+
+function toolContentText(content: unknown): string {
+	if (!Array.isArray(content)) return "";
+	const parts: string[] = [];
+	for (const c of content as Array<Record<string, unknown>>) {
+		if (!c || typeof c !== "object") continue;
+		if (c.type === "text" && typeof c.text === "string" && c.text) {
+			parts.push(c.text);
+		} else if (c.type === "file") {
+			parts.push(`[file: ${String(c.name ?? c.uri ?? "file")}]`);
+		}
+	}
+	return parts.join("\n");
 }
 
 function cssEsc(s: string): string {
