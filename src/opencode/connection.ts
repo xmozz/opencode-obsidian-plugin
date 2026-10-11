@@ -195,6 +195,36 @@ function enhancedPath(): string {
 	return current.join(path.delimiter);
 }
 
+/** Probe `<bin> --version`. Returns null when it cannot be determined. */
+export function probeVersion(binary: string, events: string[]): string | null {
+	try {
+		const { spawnSync } = require("node:child_process") as typeof import("node:child_process");
+		const res = spawnSync(binary, ["--version"], {
+			encoding: "utf8",
+			windowsHide: true,
+			timeout: 10000,
+		});
+		const out = `${res.stdout ?? ""} ${res.stderr ?? ""}`;
+		const m = /(?:^|\s)v?(\d+)\.(\d+)\.(\d+)/.exec(out);
+		if (m) {
+			const version = `${m[1]}.${m[2]}.${m[3]}`;
+			events.push(`opencode version: ${version}`);
+			return version;
+		}
+		events.push("could not parse opencode version output");
+	} catch (e) {
+		events.push(
+			`version probe failed: ${e instanceof Error ? e.message : String(e)}`,
+		);
+	}
+	return null;
+}
+
+/** True when stderr looks like CLI help (unknown flags) instead of a crash. */
+export function looksLikeHelpText(stderrTail: string[]): boolean {
+	const blob = stderrTail.join("\n");
+	return /port to listen on|Usage:|Commands:|Options:/.test(blob);
+}
 /** Spawn `opencode serve --service` detached (shared with the CLI) and wait until discoverable. */
 async function spawnSharedService(
 	binary: string,
@@ -273,9 +303,12 @@ async function spawnSharedService(
 		if (exited && child.exitCode !== 0) {
 			const tail =
 				stderrTail.length > 0 ? `\nServer output:\n${stderrTail.join("\n")}` : "";
+			const helpHint = looksLikeHelpText(stderrTail)
+				? "\nThis looks like CLI help output: the installed opencode does not understand `serve --service`. Upgrade to opencode 2.x (`opencode upgrade`), then Reconnect."
+				: "";
 			throw withDetails(
 				new Error(
-					`opencode background service exited immediately (code ${exited.code ?? "?"}${exited.signal ? `, signal ${exited.signal}` : ""}) instead of registering.${tail}`,
+					`opencode background service exited immediately (code ${exited.code ?? "?"}${exited.signal ? `, signal ${exited.signal}` : ""}) instead of registering.${tail}${helpHint}`,
 				),
 				events,
 			);
@@ -377,6 +410,19 @@ export async function connectShared(
 		attempt.resolvedPath = resolved.path;
 		attempt.tried = resolved.tried;
 		say(`resolved binary: ${resolved.path}`);
+		const version = probeVersion(resolved.path, attempt.events);
+		if (version) {
+			say(`opencode version: ${version}`);
+			const major = Number(version.split(".")[0]);
+			if (Number.isFinite(major) && major < 2) {
+				throw withDetails(
+					new Error(
+						`Found opencode ${version} at ${resolved.path}, but this plugin needs opencode 2.x with background-service support. Upgrade with \`opencode upgrade\` (or install v2 from https://opencode.ai), then Reconnect.`,
+					),
+					attempt.events,
+				);
+			}
+		}
 		say("starting opencode background service…");
 		await spawnSharedService(resolved.path, extra, attempt.events, onLog);
 		const endpoint = await discoverService();

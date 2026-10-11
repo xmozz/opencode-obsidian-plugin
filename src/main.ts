@@ -136,9 +136,7 @@ export default class OpenCodePlugin extends Plugin {
 			return true;
 		} catch (e) {
 			if (!quiet) {
-				new Notice(
-					`OpenCode: shared service failed (${describeConnectionError(e)}). Is 'opencode' installed?`,
-				);
+				new Notice(`OpenCode: ${describeConnectionError(e)}`);
 			}
 			const view = this.chatView() as unknown as {
 				setStatus?: (s: string) => void;
