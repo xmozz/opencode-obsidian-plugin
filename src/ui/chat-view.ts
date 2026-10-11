@@ -151,6 +151,7 @@ export class OpenCodeChatView extends ItemView {
 	agents: { id: string; name: string }[] = [];
 	commands: { name: string; description?: string }[] = [];
 	historyCache: VaultSession[] = [];
+	previewCache = new Map<string, string>();
 
 	private root!: HTMLElement;
 	private tabBar!: HTMLElement;
@@ -1793,6 +1794,7 @@ export class OpenCodeChatView extends ItemView {
 			for (const s of sessions.filter(
 				(x) =>
 					x.title.toLowerCase().includes(q) ||
+					(x.preview ?? "").toLowerCase().includes(q) ||
 					x.id.toLowerCase().includes(q),
 			)) {
 				list.appendChild(this.historyRow(s));
@@ -1808,17 +1810,62 @@ export class OpenCodeChatView extends ItemView {
 		}
 		const sorted = [...sessions].sort((a, b) => b.updated - a.updated);
 		for (const s of sorted) list.appendChild(this.historyRow(s));
+		void this.fillUntitledPreviews(sessions);
+	}
+
+	/**
+	 * Untitled sessions are unfindable — fill in their first user message
+	 * as a preview (background, cached, rows update in place).
+	 */
+	private async fillUntitledPreviews(sessions: VaultSession[]): Promise<void> {
+		const client = this.plugin.client;
+		if (!client) return;
+		const missing = sessions.filter((s) => !s.title && !s.preview);
+	 // apply memory cache first
+		for (const s of missing) {
+			const cached = this.previewCache.get(s.id);
+			if (cached !== undefined) s.preview = cached;
+		}
+		const pending = missing.filter((s) => !s.preview);
+	 const CHUNK = 6;
+		for (let i = 0; i < pending.length; i += CHUNK) {
+			await Promise.allSettled(
+				pending.slice(i, i + CHUNK).map(async (s) => {
+					try {
+						const msgs = await loadSessionMessages(client, s.id, 200);
+						const first = msgs.find((m) => m.role === "user");
+						const preview = (first?.text ?? "").split("\n")[0].slice(0, 90).trim();
+						if (preview) {
+							s.preview = preview;
+							this.previewCache.set(s.id, preview);
+							const row = this.historyPanel.querySelector(
+								`[data-session-id="${cssEsc(s.id)}"] .ocs-history-name`,
+							);
+							if (row) {
+								row.textContent = preview;
+								row.classList.remove("ocs-untitled");
+							}
+						}
+					} catch {
+						/* leave untitled */
+					}
+				}),
+			);
+			if (!this.historyOpen) return;
+		}
 	}
 
 	private historyRow(s: VaultSession): HTMLElement {
 		const row = el("div", "ocs-history-row");
+		row.dataset.sessionId = s.id;
 		const main = el("button", "ocs-history-main");
-		const title = el("div", "ocs-history-name", s.title || "Untitled session");
-		const sub = el(
+		const hasTitle = !!s.title;
+		const title = el(
 			"div",
-			"ocs-history-sub",
-			`${s.modelProvider ? `${s.modelProvider}/${s.modelId}` : s.modelId || "model ?"} · ${fmtTime(s.updated)}`,
+			`ocs-history-name${hasTitle || s.preview ? "" : " ocs-untitled"}`,
+			s.preview || s.title || "Untitled session",
 		);
+		const sub = el("div", "ocs-history-sub", fmtTime(s.updated));
 		main.appendChild(title);
 		main.appendChild(sub);
 		main.title = s.id;

@@ -685,6 +685,12 @@ button.ocs-copy-btn:active {
 	white-space: nowrap;
 }
 
+.ocs-history-name.ocs-untitled {
+	color: var(--text-faint);
+	font-weight: 400;
+	font-style: italic;
+}
+
 .ocs-history-sub {
 	font-size: calc(var(--ocs-fs, 13px) - 2px);
 	color: var(--text-muted);

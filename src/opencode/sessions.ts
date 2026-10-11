@@ -9,6 +9,8 @@ export interface VaultSession {
 	modelId: string;
 	modelVariant?: string;
 	updated: number;
+	/** First user message preview (filled lazily for untitled sessions). */
+	preview?: string;
 }
 
 export interface ChatPart {
@@ -66,7 +68,7 @@ export async function listVaultSessions(
 		})
 		.map((s) => ({
 			id: String(s.id ?? s.sessionID ?? s.sessionId ?? ""),
-			title: String(s.title ?? s.name ?? "Untitled session"),
+			title: String(s.title ?? s.name ?? ""),
 			directory: String(s.directory ?? s.location?.directory ?? vaultDir),
 			agent: String(s.agent ?? ""),
 			modelProvider: String(s.model?.providerID ?? s.model?.provider ?? ""),
