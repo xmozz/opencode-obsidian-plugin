@@ -2209,12 +2209,16 @@ export class OpenCodeChatView extends ItemView {
 				break;
 			}
 			case "session.tool.input.delta": {
+				// Ignored like Grimoire: deltas are partial JSON fragments.
+				// The authoritative input arrives via input.ended (.text)
+				// and called (.input) below.
+				break;
+			}
+			case "session.tool.input.ended": {
 				if (tab) {
 					const id = String(data.id ?? "");
-					const st = id ? this.liveToolState(tab.sessionId, id) : undefined;
-					if (st) {
-						st.inputText += String(data.delta ?? "");
-						this.paintLiveTool(st);
+					if (id && typeof data.text === "string" && data.text) {
+						this.upsertLiveTool(tab, id, { inputText: data.text });
 					}
 				}
 				break;
