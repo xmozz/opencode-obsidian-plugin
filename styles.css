@@ -210,10 +210,12 @@
 .ocs-message-list {
 	flex: 1;
 	overflow-y: auto;
+	overflow-x: hidden;
 	padding: 12px;
 	display: flex;
 	flex-direction: column;
 	gap: 10px;
+	min-width: 0;
 }
 
 .ocs-empty,
@@ -228,6 +230,8 @@
 	flex-direction: column;
 	gap: 2px;
 	max-width: 100%;
+	min-width: 0;
+	overflow-wrap: anywhere;
 }
 
 .ocs-msg.ocs-user {
@@ -239,6 +243,8 @@
 	border-radius: 10px;
 	padding: 8px 10px;
 	max-width: 100%;
+	min-width: 0;
+	overflow-wrap: anywhere;
 }
 
 .ocs-msg.ocs-user .ocs-bubble {
@@ -315,6 +321,8 @@ button.ocs-copy-btn:active {
 .ocs-msg-body {
 	line-height: 1.55;
 	word-wrap: break-word;
+	overflow-wrap: anywhere;
+	min-width: 0;
 }
 
 .ocs-math-block {
@@ -354,11 +362,16 @@ button.ocs-copy-btn:active {
 	padding-left: 8px;
 	color: var(--text-muted);
 	font-size: calc(var(--ocs-fs, 13px) - 1px);
+	max-width: 100%;
+	min-width: 0;
+	overflow: hidden;
 }
 
 .ocs-thinking-text {
 	margin: 4px 0;
 	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+	word-break: break-word;
 }
 
 .ocs-toolcall,
