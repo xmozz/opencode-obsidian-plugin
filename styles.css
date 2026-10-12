@@ -717,6 +717,22 @@ button.ocs-copy-btn:active {
 	text-align: center;
 }
 
+.ocs-history-more {
+	margin: 6px;
+	padding: 6px 10px;
+	border: 1px dashed var(--background-modifier-border);
+	border-radius: 8px;
+	background: transparent;
+	color: var(--text-muted);
+	cursor: pointer;
+	font-size: calc(var(--ocs-fs, 13px) - 1px);
+}
+
+.ocs-history-more:hover {
+	color: var(--text-normal);
+	border-color: var(--text-muted);
+}
+
 /* ---- composer: single Grimoire-style box, no inner borders ---- */
 .ocs-composer {
 	border: 1px solid var(--background-modifier-border);

@@ -32,6 +32,11 @@ export default class OpenCodePlugin extends Plugin {
 			DEFAULT_SETTINGS,
 			(this.loadedData.settings ?? {}) as Partial<PluginSettings>,
 		);
+		// Migrate the legacy autoApprove boolean to the three-way permissionMode.
+		const legacy = (this.loadedData.settings ?? {}) as Record<string, unknown>;
+		if (typeof legacy.permissionMode !== "string") {
+			this.settings.permissionMode = legacy.autoApprove === true ? "full" : "safe";
+		}
 
 		this.registerView(VIEW_TYPE_OPENCODE, (leaf) => new OpenCodeChatView(leaf, this));
 
@@ -205,13 +210,21 @@ class OpenCodeSettingTab extends PluginSettingTab {
 				return t;
 			});
 		new Setting(containerEl)
-			.setName("Auto-approve permissions")
-			.setDesc("When on, permission requests are accepted automatically (like CLI --auto).")
-			.addToggle((t) =>
-				t.setValue(this.plugin.settings.autoApprove).onChange(async (v) => {
-					this.plugin.settings.autoApprove = v;
-					await this.plugin.saveSettings();
-				}),
+			.setName("Permission mode")
+			.setDesc(
+				"Full access approves every request automatically. Vault only auto-approves file access inside the vault and asks for anything outside. Safe asks for every request.",
+			)
+			.addDropdown((d) =>
+				d
+					.addOption("full", "Full access")
+					.addOption("vault", "Vault only")
+					.addOption("safe", "Safe (ask always)")
+					.setValue(this.plugin.settings.permissionMode)
+					.onChange(async (v) => {
+						this.plugin.settings.permissionMode = v as PluginSettings["permissionMode"];
+						await this.plugin.saveSettings();
+						this.plugin.chatView()?.renderApproveBtn();
+					}),
 			);
 		new Setting(containerEl)
 			.setName("Font size")
@@ -279,6 +292,7 @@ class OpenCodeSettingTab extends PluginSettingTab {
 				t.setValue(this.plugin.settings.sendWithButtonOnly).onChange(async (v) => {
 					this.plugin.settings.sendWithButtonOnly = v;
 					await this.plugin.saveSettings();
+					this.plugin.chatView()?.updateComposerPlaceholder();
 				}),
 			);
 		new Setting(containerEl)

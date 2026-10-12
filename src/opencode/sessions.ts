@@ -52,20 +52,29 @@ function normalizeDir(dir: string): string {
 	return dir.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
 }
 
+export interface VaultSessionPage {
+	sessions: VaultSession[];
+	/** Cursor for the next page, or null when there are no more sessions. */
+	next: string | null;
+}
+
 /** List sessions for this vault directory only (shared DB, filtered by cwd). */
 export async function listVaultSessions(
 	client: OpenCodeClient,
 	vaultDir: string,
 	limit = 100,
-): Promise<VaultSession[]> {
+	cursor?: string,
+): Promise<VaultSessionPage> {
 	const res = await client.session.list({
 		directory: vaultDir,
 		limit,
+		...(cursor ? { cursor } : {}),
 	} as unknown as Parameters<OpenCodeClient["session"]["list"]>[0]);
 	const data = (res as unknown as AnyRecord).data ?? res;
 	const arr: AnyRecord[] = Array.isArray(data) ? data : (data.sessions ?? []);
+	const next = (res as unknown as AnyRecord).cursor?.next as string | null | undefined;
 	const want = normalizeDir(vaultDir);
-	return arr
+	const sessions = arr
 		.filter((s) => {
 			const d =
 				s.directory ?? s.location?.directory ?? s.project?.directory ?? "";
@@ -86,6 +95,7 @@ export async function listVaultSessions(
 			),
 		}))
 		.filter((s) => s.id);
+	return { sessions, next: next ?? null };
 }
 
 export async function createVaultSession(

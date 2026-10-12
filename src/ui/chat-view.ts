@@ -27,6 +27,7 @@ import {
 } from "../opencode/sessions";
 import { FileAttachModal } from "./attach-modal";
 import { ModelPickerModal } from "./model-modal";
+import { ConfirmModal } from "./confirm-modal";
 
 export const VIEW_TYPE_OPENCODE = "opencode-sync-chat";
 
@@ -51,6 +52,12 @@ interface TabState {
 	images: Array<{ id: string; name: string; dataUrl: string }>;
 	/** True while the active note chip purely mirrors the focused file. */
 	autoAttached: boolean;
+	/** Per-tab model selection ("provider/id"). Falls back to the global default. */
+	model: string;
+	/** Per-tab agent selection. Falls back to the global default. */
+	agent: string;
+	/** Per-tab model variant (reasoning effort). */
+	variant: string;
 }
 
 interface DiscoveredModel {
@@ -78,6 +85,17 @@ function newTabId(): string {
 	tabCounter += 1;
 	return `tab-${Date.now().toString(36)}-${tabCounter}`;
 }
+
+/** Actions that always require an explicit decision, even in vault-only mode. */
+const SHELL_OR_NETWORK_ACTIONS = new Set([
+	"bash",
+	"shell",
+	"exec",
+	"webfetch",
+	"websearch",
+	"todowrite",
+	"todoread",
+]);
 
 function el<K extends keyof HTMLElementTagNameMap>(
 	tag: K,
@@ -153,6 +171,8 @@ export class OpenCodeChatView extends ItemView {
 	commands: { name: string; description?: string }[] = [];
 	historyCache: VaultSession[] = [];
 	previewCache = new Map<string, string>();
+	private historyNext: string | null = null;
+	private lastStatus = "Not connected";
 
 	private root!: HTMLElement;
 	private tabBar!: HTMLElement;
@@ -315,11 +335,7 @@ export class OpenCodeChatView extends ItemView {
 		this.attachBtn.onclick = () => this.openSystemExplorer();
 
 		this.restrictBtn = el("button", "ocs-icon-btn", "");
-		this.restrictBtn.onclick = () => {
-			this.plugin.settings.autoApprove = !this.plugin.settings.autoApprove;
-			void this.plugin.saveSettings();
-			this.renderApproveBtn();
-		};
+		this.restrictBtn.onclick = (e) => this.openPermissionModeMenu(e as MouseEvent);
 
 		this.forkBtn = el("button", "ocs-icon-btn", "");
 		setIconOrText(this.forkBtn, "git-fork", "⑂", "Fork session");
@@ -339,9 +355,8 @@ export class OpenCodeChatView extends ItemView {
 		right.appendChild(this.forkBtn);
 		this.composerText = document.createElement("textarea");
 		this.composerText.className = "ocs-input";
-		this.composerText.placeholder =
-			"Ask OpenCode…  (/ for commands, Enter to send)";
 		this.composerText.rows = 3;
+		this.updateComposerPlaceholder();
 		this.composerText.onkeydown = (e) => {
 			if (this.slashOpen) {
 				if (e.key === "ArrowDown") {
@@ -471,7 +486,8 @@ export class OpenCodeChatView extends ItemView {
 		void this.app.workspace.openLinkText(href, "", false);
 	}
 
-	private renderSendBtn(): void {		const streaming = this.activeTab()?.streaming ?? false;
+	private renderSendBtn(): void {
+		const streaming = this.activeTab()?.streaming ?? false;
 		setIconOrText(
 			this.sendBtn,
 			streaming ? "square" : "arrow-up",
@@ -479,17 +495,76 @@ export class OpenCodeChatView extends ItemView {
 			streaming ? "Stop" : "Send",
 		);
 		this.sendBtn.classList.toggle("ocs-busy", streaming);
+		this.updateStatusHint();
 	}
 
-	private renderApproveBtn(): void {
-		const auto = this.plugin.settings.autoApprove;
-		setIconOrText(
-			this.restrictBtn,
-			auto ? "shield-check" : "shield",
-			auto ? "Auto" : "Safe",
-			auto ? "Auto-approve: permissions are accepted automatically" : "Safe: ask before edits and commands",
-		);
-		this.restrictBtn.classList.toggle("ocs-auto", auto);
+	/** Renders the permission-mode button (three-way: full / vault / safe). */
+	renderApproveBtn(): void {
+		const mode = this.plugin.settings.permissionMode;
+		const label = mode === "full" ? "Full" : mode === "vault" ? "Vault" : "Safe";
+		const title =
+			mode === "full"
+				? "Full access: approve every request automatically"
+				: mode === "vault"
+					? "Vault only: auto-approve vault files, ask for anything outside"
+					: "Safe: ask before edits and commands";
+		this.restrictBtn.empty();
+		const svg = getIcon(mode === "full" ? "shield-check" : "shield");
+		if (svg) this.restrictBtn.appendChild(svg);
+		this.restrictBtn.appendChild(el("span", "ocs-picker-label", label));
+		this.restrictBtn.setAttribute("aria-label", title);
+		this.restrictBtn.title = title;
+		this.restrictBtn.classList.toggle("ocs-auto", mode !== "safe");
+	}
+
+	/** Opens the three-way permission-mode menu on the shield button. */
+	private openPermissionModeMenu(e: MouseEvent): void {
+		const menu = new Menu();
+		const modes = [
+			{ value: "full" as const, label: "Full access" },
+			{ value: "vault" as const, label: "Vault only" },
+			{ value: "safe" as const, label: "Safe (ask always)" },
+		];
+		for (const m of modes) {
+			menu.addItem((i) =>
+				i
+					.setTitle(m.label)
+					.setChecked(this.plugin.settings.permissionMode === m.value)
+					.onClick(() => {
+						this.plugin.settings.permissionMode = m.value;
+						void this.plugin.saveSettings();
+						this.renderApproveBtn();
+					}),
+			);
+		}
+		menu.showAtMouseEvent(e);
+	}
+
+	/** Decides whether a permission request is auto-approved under the current mode. */
+	private shouldAutoApprove(data: Record<string, unknown>): boolean {
+		const mode = this.plugin.settings.permissionMode;
+		if (mode === "full") return true;
+		if (mode === "safe") return false;
+		// Vault mode: auto-approve file access that stays inside the vault. Shell
+		// and network actions always ask, and anything outside the vault asks.
+		const action = String(data.action ?? "");
+		if (SHELL_OR_NETWORK_ACTIONS.has(action)) return false;
+		const resources = Array.isArray(data.resources) ? (data.resources as unknown[]) : [];
+		if (resources.length === 0) return false;
+		return resources.every((r) => this.resourceInVault(String(r)));
+	}
+
+	/** True when a permission resource path points inside the vault. */
+	private resourceInVault(resource: string): boolean {
+		const vault = this.plugin.vaultDir().replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+		if (!vault) return false;
+		const norm = resource.replace(/\\/g, "/");
+		if (isAbsolutePath(norm)) {
+			const lower = norm.toLowerCase();
+			return lower === vault || lower.startsWith(`${vault}/`);
+		}
+		// Relative paths resolve against the vault unless they escape via "..".
+		return !norm.split("/").includes("..");
 	}
 
 	// ---------- tabs (UI-only; sessions live in opencode, not in files) ----------
@@ -502,6 +577,9 @@ export class OpenCodeChatView extends ItemView {
 				title: t.title,
 				activeNote: t.activeNote,
 				contextFiles: t.contextFiles,
+				model: t.model,
+				agent: t.agent,
+				variant: t.variant,
 			})),
 			activeSessionId: this.activeTab()?.sessionId ?? null,
 		});
@@ -514,13 +592,20 @@ export class OpenCodeChatView extends ItemView {
 				title: string;
 				activeNote?: string | null;
 				contextFiles?: string[];
+				model?: string;
+				agent?: string;
+				variant?: string;
 			}[];
+			activeSessionId?: string | null;
 		};
 		const open = data.openTabs ?? [];
 		this.tabs = [];
 		this.activeTabId = null;
 		if (open.length === 0) {
-			void this.newTab();
+			// Do not auto-create a session on startup; show the empty state.
+			this.renderTabs();
+			this.renderContent();
+			this.renderChips();
 			return;
 		}
 		for (const o of open.slice(0, this.plugin.settings.maxTabs)) {
@@ -541,9 +626,17 @@ export class OpenCodeChatView extends ItemView {
 				contextFiles: Array.isArray(o.contextFiles) ? o.contextFiles : [],
 				images: [],
 				autoAttached: false,
+				model: o.model ?? this.plugin.settings.model,
+				agent: o.agent ?? this.plugin.settings.agent,
+				variant: o.variant ?? this.plugin.settings.variant,
 			};
 			this.tabs.push(tab);
 			if (!this.activeTabId) this.activeTabId = tab.tabId;
+		}
+		// Restore the previously active session when it is still present.
+		if (data.activeSessionId) {
+			const active = this.tabs.find((t) => t.sessionId === data.activeSessionId);
+			if (active) this.activeTabId = active.tabId;
 		}
 		this.renderTabs();
 		this.renderContent();
@@ -555,7 +648,13 @@ export class OpenCodeChatView extends ItemView {
 		return this.tabs.find((t) => t.tabId === this.activeTabId);
 	}
 
-	private async newTab(sessionId?: string, title?: string): Promise<void> {
+	private async newTab(
+		sessionId?: string,
+		title?: string,
+		model?: string,
+		agent?: string,
+		variant?: string,
+	): Promise<void> {
 		if (this.tabs.length >= this.plugin.settings.maxTabs) {
 			new Notice(`Max ${this.plugin.settings.maxTabs} tabs open`);
 			return;
@@ -564,6 +663,11 @@ export class OpenCodeChatView extends ItemView {
 		const vaultDir = this.plugin.vaultDir();
 		let sid = sessionId;
 		let t = title ?? "New session";
+		// Per-tab model/agent selection: explicit override, otherwise inherit the
+		// active tab's choice, otherwise the global default.
+		const modelChoice = model ?? this.activeTab()?.model ?? this.plugin.settings.model;
+		const agentChoice = agent ?? this.activeTab()?.agent ?? this.plugin.settings.agent;
+		const variantChoice = variant ?? this.activeTab()?.variant ?? this.plugin.settings.variant;
 		if (!sid) {
 			if (!client) {
 				new Notice("OpenCode not connected yet");
@@ -573,8 +677,8 @@ export class OpenCodeChatView extends ItemView {
 				const created = await createVaultSession(
 					client,
 					vaultDir,
-					this.selectedModelRef() ?? undefined,
-					this.plugin.settings.agent || undefined,
+					modelChoice ? parseModelRef(modelChoice) ?? undefined : undefined,
+					agentChoice || undefined,
 				);
 				sid = created.id;
 				t = created.title;
@@ -608,6 +712,9 @@ export class OpenCodeChatView extends ItemView {
 			contextFiles: [],
 			images: [],
 			autoAttached: false,
+			model: modelChoice,
+			agent: agentChoice,
+			variant: variantChoice,
 		};
 		this.tabs.push(tab);
 		this.activeTabId = tab.tabId;
@@ -615,6 +722,7 @@ export class OpenCodeChatView extends ItemView {
 		this.renderTabs();
 		this.renderContent();
 		this.renderChips();
+		this.refreshPickers();
 		this.persistTabs();
 		if (sid) void this.ensureLoaded(tab);
 	}
@@ -904,8 +1012,8 @@ export class OpenCodeChatView extends ItemView {
 			thumb.appendChild(x);
 			this.chipsRow.appendChild(thumb);
 		}
-		const add = el("button", "ocs-chip-add", "+ Add");
-		add.title = "Attach vault file";
+		const add = el("button", "ocs-chip-add", "+ Add vault item");
+		add.title = "Attach a vault file as context";
 		add.onclick = () => this.openAttachPicker();
 		this.chipsRow.appendChild(add);
 		// Usage text lives top-right inside the composer box (plain text).
@@ -936,6 +1044,14 @@ export class OpenCodeChatView extends ItemView {
 		this.root?.style.setProperty("--ocs-fs", `${size}px`);
 	}
 
+	/** Keeps the composer hint honest about the Enter-to-send behavior. */
+	updateComposerPlaceholder(): void {
+		if (!this.composerText) return;
+		this.composerText.placeholder = this.plugin.settings.sendWithButtonOnly
+			? "Ask OpenCode…  (/ for commands, send with the button)"
+			: "Ask OpenCode…  (/ for commands, Enter to send)";
+	}
+
 	/** Loading state while the opencode service is (re)starting. */
 	setConnecting(active: boolean, detail?: string): void {
 		this.connectBanner.classList.toggle("ocs-hidden", !active);
@@ -948,6 +1064,7 @@ export class OpenCodeChatView extends ItemView {
 		this.content.empty();
 		this.renderChips();
 		this.renderQueueBar();
+		this.refreshPickers();
 		const tab = this.activeTab();
 		if (!tab) {
 			this.content.appendChild(el("div", "ocs-empty", "Open a session tab to start."));
@@ -1191,13 +1308,23 @@ export class OpenCodeChatView extends ItemView {
 
 	// ---------- composer actions ----------
 
+	/** Active tab's model, falling back to the global default. */
+	private activeModel(): string {
+		return this.activeTab()?.model ?? this.plugin.settings.model;
+	}
+
+	/** Active tab's agent, falling back to the global default. */
+	private activeAgent(): string {
+		return this.activeTab()?.agent ?? this.plugin.settings.agent;
+	}
+
+	/** Active tab's variant, falling back to the global default. */
+	private activeVariant(): string {
+		return this.activeTab()?.variant ?? this.plugin.settings.variant;
+	}
+
 	private selectedModelRef(): { providerID: string; id: string } | null {
-		const v = this.plugin.settings.model;
-		if (!v) return null;
-		const [providerID, ...rest] = v.split("/");
-		const id = rest.join("/");
-		if (!providerID || !id) return null;
-		return { providerID, id };
+		return parseModelRef(this.activeModel());
 	}
 
 	private modelLabel(value: string): string {
@@ -1236,7 +1363,7 @@ export class OpenCodeChatView extends ItemView {
 			menu.addItem((i) =>
 				i
 					.setTitle(a.name || a.id)
-					.setChecked(a.id === this.plugin.settings.agent)
+					.setChecked(a.id === this.activeAgent())
 					.onClick(() => void this.onAgentChanged(a.id)),
 			);
 		}
@@ -1246,11 +1373,15 @@ export class OpenCodeChatView extends ItemView {
 	private async onModelChanged(value?: string): Promise<void> {
 		const tab = this.activeTab();
 		const client = this.plugin.client;
-		if (value !== undefined) this.plugin.settings.model = value;
+		if (value !== undefined) {
+			// Per-tab selection first; remember it as the default for new sessions.
+			if (tab) tab.model = value;
+			this.plugin.settings.model = value;
+		}
 		const ref = this.selectedModelRef();
 		void this.plugin.saveSettings();
+		this.persistTabs();
 		this.renderModelBtn();
-		this.renderVariantOptions();
 		this.updateUsageBadge();
 		if (tab && client && ref && tab.sessionId && !tab.sessionId.startsWith("pending-")) {
 			try {
@@ -1264,19 +1395,17 @@ export class OpenCodeChatView extends ItemView {
 	private async onVariantChanged(value?: string): Promise<void> {
 		const tab = this.activeTab();
 		const client = this.plugin.client;
+		if (value !== undefined) {
+			if (tab) tab.variant = value;
+			this.plugin.settings.variant = value;
+		}
 		const ref = this.selectedModelRef();
-		if (value !== undefined) this.plugin.settings.variant = value;
 		void this.plugin.saveSettings();
+		this.persistTabs();
 		this.renderEffortBtn();
 		if (tab && client && ref && tab.sessionId && !tab.sessionId.startsWith("pending-")) {
 			try {
-				await switchModel(
-					client,
-					tab.sessionId,
-					ref.providerID,
-					ref.id,
-					this.plugin.settings.variant,
-				);
+				await switchModel(client, tab.sessionId, ref.providerID, ref.id, this.activeVariant());
 			} catch (e) {
 				new Notice(`Variant switch failed: ${errMsg(e)}`);
 			}
@@ -1286,12 +1415,16 @@ export class OpenCodeChatView extends ItemView {
 	private async onAgentChanged(value?: string): Promise<void> {
 		const tab = this.activeTab();
 		const client = this.plugin.client;
-		if (value !== undefined) this.plugin.settings.agent = value;
+		if (value !== undefined) {
+			if (tab) tab.agent = value;
+			this.plugin.settings.agent = value;
+		}
 		void this.plugin.saveSettings();
+		this.persistTabs();
 		this.renderAgentBtn();
 		if (tab && client && tab.sessionId && !tab.sessionId.startsWith("pending-")) {
 			try {
-				await switchAgent(client, tab.sessionId, this.plugin.settings.agent);
+				await switchAgent(client, tab.sessionId, this.activeAgent());
 			} catch (e) {
 				new Notice(`Agent switch failed: ${errMsg(e)}`);
 			}
@@ -1630,14 +1763,24 @@ export class OpenCodeChatView extends ItemView {
 		const tab = this.activeTab();
 		const client = this.plugin.client;
 		if (!tab || !client) return;
-		try {
-			await removeSession(client, tab.sessionId);
-			this.closeTab(tab.tabId);
-			void this.refreshHistory();
-			new Notice("Session deleted in opencode (visible in CLI too)");
-		} catch (e) {
-			new Notice(`Delete failed: ${errMsg(e)}`);
-		}
+		new ConfirmModal(
+			this.app,
+			"Delete session?",
+			`Delete "${tab.title}"? This also removes it from the CLI and cannot be undone.`,
+			"Delete",
+			() => {
+				void (async () => {
+					try {
+						await removeSession(client, tab.sessionId);
+						this.closeTab(tab.tabId);
+						void this.refreshHistory();
+						new Notice("Session deleted in opencode (visible in CLI too)");
+					} catch (e) {
+						new Notice(`Delete failed: ${errMsg(e)}`);
+					}
+				})();
+			},
+		).open();
 	}
 
 	// ---------- catalogs (models / agents / commands) ----------
@@ -1674,7 +1817,9 @@ export class OpenCodeChatView extends ItemView {
 				return { name: String(r.name ?? ""), description: r.description as string | undefined };
 			});
 		} catch (e) {
-			this.setStatus(`Catalog load failed: ${errMsg(e)}`);
+			const msg = `Catalog load failed: ${errMsg(e)}`;
+			this.setStatus(msg);
+			new Notice(msg);
 			return;
 		}
 		this.renderModelBtn();
@@ -1682,17 +1827,25 @@ export class OpenCodeChatView extends ItemView {
 		this.setStatus("");
 	}
 
+	/** Re-renders model/agent/effort pickers to match the active tab. */
+	private refreshPickers(): void {
+		this.renderModelBtn();
+		this.renderAgentBtn();
+	}
+
 	private renderModelBtn(): void {
-		if (!this.plugin.settings.model && this.models.length > 0) {
-			this.plugin.settings.model = `${this.models[0].providerID}/${this.models[0].id}`;
+		if (!this.activeModel() && this.models.length > 0) {
+			const first = `${this.models[0].providerID}/${this.models[0].id}`;
+			const tab = this.activeTab();
+			if (tab) tab.model = first;
+			this.plugin.settings.model = first;
 			void this.plugin.saveSettings();
 		}
-		const label = this.plugin.settings.model
-			? this.modelLabel(this.plugin.settings.model)
-			: "Model";
+		const value = this.activeModel();
+		const label = value ? this.modelLabel(value) : "Model";
 		this.modelBtn.empty();
 		this.modelBtn.appendChild(el("span", "ocs-picker-label", label));
-		this.modelBtn.title = `Model: ${this.plugin.settings.model || "none"} (click to change)`;
+		this.modelBtn.title = `Model: ${value || "none"} (click to change)`;
 		this.renderVariantOptions();
 	}
 
@@ -1702,7 +1855,9 @@ export class OpenCodeChatView extends ItemView {
 			(x) => ref && x.providerID === ref.providerID && x.id === ref.id,
 		);
 		this.variantOptions = ["default", ...(m?.variants ?? []).filter((v) => v !== "default")];
-		if (!this.variantOptions.includes(this.plugin.settings.variant)) {
+		if (!this.variantOptions.includes(this.activeVariant())) {
+			const tab = this.activeTab();
+			if (tab) tab.variant = this.variantOptions[0];
 			this.plugin.settings.variant = this.variantOptions[0];
 			void this.plugin.saveSettings();
 		}
@@ -1710,7 +1865,7 @@ export class OpenCodeChatView extends ItemView {
 	}
 
 	private renderEffortBtn(): void {
-		const v = this.plugin.settings.variant || "default";
+		const v = this.activeVariant() || "default";
 		this.effortBtn.empty();
 		this.effortBtn.appendChild(el("span", "ocs-picker-label", v === "default" ? "Auto" : v));
 		this.effortBtn.appendChild(el("span", "ocs-picker-chev", "▾"));
@@ -1724,7 +1879,7 @@ export class OpenCodeChatView extends ItemView {
 			menu.addItem((i) =>
 				i
 					.setTitle(v === "default" ? "Auto" : v)
-					.setChecked(v === this.plugin.settings.variant)
+					.setChecked(v === this.activeVariant())
 					.onClick(() => void this.onVariantChanged(v)),
 			);
 		}
@@ -1732,17 +1887,18 @@ export class OpenCodeChatView extends ItemView {
 	}
 
 	private renderAgentBtn(): void {
-		const saved = this.plugin.settings.agent;
-		if (!saved && this.agents.length > 0) {
+		if (!this.activeAgent() && this.agents.length > 0) {
 			const preferred = this.agents.find((a) => a.id === "build") ?? this.agents[0];
+			const tab = this.activeTab();
+			if (tab) tab.agent = preferred.id;
 			this.plugin.settings.agent = preferred.id;
 			void this.plugin.saveSettings();
 		}
-		const label = this.agentLabel(this.plugin.settings.agent);
+		const label = this.agentLabel(this.activeAgent());
 		this.agentBtn.empty();
 		this.agentBtn.appendChild(el("span", "ocs-picker-label", label));
 		this.agentBtn.appendChild(el("span", "ocs-picker-chev", "▾"));
-		this.agentBtn.title = `Agent: ${this.plugin.settings.agent || "none"} (click to change)`;
+		this.agentBtn.title = `Agent: ${this.activeAgent() || "none"} (click to change)`;
 	}
 
 	// ---------- history: THE shared session list (/session) ----------
@@ -1772,12 +1928,28 @@ export class OpenCodeChatView extends ItemView {
 			return;
 		}
 		try {
-			this.historyCache = await listVaultSessions(client, this.plugin.vaultDir());
+			const page = await listVaultSessions(client, this.plugin.vaultDir(), 50);
+			this.historyCache = page.sessions;
+			this.historyNext = page.next;
 		} catch (e) {
 			new Notice(`Session list failed: ${errMsg(e)}`);
 			return;
 		}
 		if (this.historyOpen) this.openHistoryRender(this.historyCache);
+	}
+
+	/** Appends the next page of sessions to the open history panel. */
+	private async loadMoreHistory(): Promise<void> {
+		const client = this.plugin.client;
+		if (!client || !this.historyNext) return;
+		try {
+			const page = await listVaultSessions(client, this.plugin.vaultDir(), 50, this.historyNext);
+			this.historyCache = this.historyCache.concat(page.sessions);
+			this.historyNext = page.next;
+			this.openHistoryRender(this.historyCache);
+		} catch (e) {
+			new Notice(`Session list failed: ${errMsg(e)}`);
+		}
 	}
 
 	private openHistoryRender(sessions: VaultSession[]): void {
@@ -1822,6 +1994,11 @@ export class OpenCodeChatView extends ItemView {
 		}
 		const sorted = [...sessions].sort((a, b) => b.updated - a.updated);
 		for (const s of sorted) list.appendChild(this.historyRow(s));
+		if (this.historyNext) {
+			const more = el("button", "ocs-history-more", "Load more sessions");
+			more.onclick = () => void this.loadMoreHistory();
+			this.historyPanel.appendChild(more);
+		}
 		void this.fillUntitledPreviews(sessions);
 	}
 
@@ -1881,44 +2058,53 @@ export class OpenCodeChatView extends ItemView {
 		main.appendChild(title);
 		main.appendChild(sub);
 		main.title = s.id;
-		main.onclick = () => void this.openSessionInActiveTab(s);
+		main.onclick = () => void this.openSession(s);
 		row.appendChild(main);
 		const del = el("button", "ocs-icon-btn", "🗑");
 		del.title = "Delete session in opencode";
-		del.onclick = async () => {
+		del.onclick = () => {
 			const client = this.plugin.client;
 			if (!client) return;
-			try {
-				await removeSession(client, s.id);
-				const tab = this.tabs.find((t) => t.sessionId === s.id);
-				if (tab) this.closeTab(tab.tabId);
-				void this.refreshHistory();
-			} catch (e) {
-				new Notice(`Delete failed: ${errMsg(e)}`);
-			}
+			const name = s.title || s.preview || "Untitled session";
+			new ConfirmModal(
+				this.app,
+				"Delete session?",
+				`Delete "${name}"? This also removes it from the CLI and cannot be undone.`,
+				"Delete",
+				() => {
+					void (async () => {
+						try {
+							await removeSession(client, s.id);
+							const tab = this.tabs.find((t) => t.sessionId === s.id);
+							if (tab) this.closeTab(tab.tabId);
+							void this.refreshHistory();
+						} catch (e) {
+							new Notice(`Delete failed: ${errMsg(e)}`);
+						}
+					})();
+				},
+			).open();
 		};
 		row.appendChild(del);
 		return row;
 	}
 
-	/** Switch the active tab to a native session (CLI sessions included). */
-	private async openSessionInActiveTab(s: VaultSession): Promise<void> {
-		let tab = this.activeTab();
-		if (!tab) {
-			await this.newTab(s.id, s.title);
+	/**
+	 * Opens a native session (CLI sessions included) in its own tab. If the
+	 * session already has a tab, focus it instead of duplicating it.
+	 */
+	private async openSession(s: VaultSession): Promise<void> {
+		const existing = this.tabs.find((t) => t.sessionId === s.id);
+		if (existing) {
+			this.activeTabId = existing.tabId;
+			this.renderTabs();
+			this.renderContent();
 			this.closeHistory();
 			return;
 		}
-		tab.sessionId = s.id;
-		tab.title = s.title;
-		tab.messages = [];
-		tab.loaded = false;
-		tab.streaming = false;
-		this.renderTabs();
-		this.renderContent();
-		this.persistTabs();
+		const model = s.modelProvider && s.modelId ? `${s.modelProvider}/${s.modelId}` : undefined;
+		await this.newTab(s.id, s.title, model, s.agent || undefined, s.modelVariant);
 		this.closeHistory();
-		await this.ensureLoaded(tab);
 	}
 
 	// ---------- live event loop (shared server → all clients see everything) ----------
@@ -2420,10 +2606,9 @@ export class OpenCodeChatView extends ItemView {
 				break;
 			}
 			case "permission.asked": {
-				const auto = this.plugin.settings.autoApprove;
 				const client = this.plugin.client;
 				const requestID = String(data.id ?? "");
-				if (auto && client && requestID) {
+				if (client && requestID && this.shouldAutoApprove(data)) {
 					const sid = String(data.sessionID ?? tab?.sessionId ?? "");
 					if (sid) {
 						void replyPermission(client, sid, requestID, "once").catch(() => {});
@@ -2580,7 +2765,21 @@ export class OpenCodeChatView extends ItemView {
 	}
 
 	private setStatus(text: string): void {
-		this.statusLine.textContent = text;
+		this.lastStatus = text;
+		this.updateStatusHint();
+	}
+
+	/**
+	 * Shows the connection/catalog status, but overlays a stop hint while the
+	 * active tab is streaming so the double-Esc gesture is discoverable.
+	 */
+	private updateStatusHint(): void {
+		if (this.activeTab()?.streaming) {
+			this.statusLine.textContent =
+				"Working… press ■ (Stop) or Esc twice to interrupt";
+		} else {
+			this.statusLine.textContent = this.lastStatus;
+		}
 	}
 
 	onConnected(): void {
@@ -2594,6 +2793,15 @@ export class OpenCodeChatView extends ItemView {
 		this.startEventLoop();
 		void this.flushQueue();
 	}
+}
+
+/** Parses a "provider/id" model string into its parts. */
+function parseModelRef(v: string): { providerID: string; id: string } | null {
+	if (!v) return null;
+	const [providerID, ...rest] = v.split("/");
+	const id = rest.join("/");
+	if (!providerID || !id) return null;
+	return { providerID, id };
 }
 
 function toArray(v: unknown): unknown[] {

@@ -4,7 +4,8 @@ export interface PluginSettings {
 	model: string;
 	agent: string;
 	variant: string;
-	autoApprove: boolean;
+	/** Permission approval mode: "full" (approve everything), "vault" (auto-approve vault files only), "safe" (always ask). */
+	permissionMode: "full" | "safe" | "vault";
 	maxTabs: number;
 	fontSize: number;
 	latexHint: boolean;
@@ -21,7 +22,7 @@ export const DEFAULT_SETTINGS: PluginSettings = {
 	model: "",
 	agent: "",
 	variant: "default",
-	autoApprove: false,
+	permissionMode: "safe",
 	maxTabs: 10,
 	fontSize: 13,
 	latexHint: true,
