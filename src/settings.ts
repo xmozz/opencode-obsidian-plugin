@@ -9,6 +9,8 @@ export interface PluginSettings {
 	fontSize: number;
 	latexHint: boolean;
 	autoAttachActiveFile: boolean;
+	notifyOnDone: boolean;
+	notifyWithContent: boolean;
 	sendWithButtonOnly: boolean;
 	refreshOnOpen: boolean;
 }
@@ -24,6 +26,8 @@ export const DEFAULT_SETTINGS: PluginSettings = {
 	fontSize: 13,
 	latexHint: true,
 	autoAttachActiveFile: true,
+	notifyOnDone: false,
+	notifyWithContent: true,
 	sendWithButtonOnly: false,
 	refreshOnOpen: true,
 };

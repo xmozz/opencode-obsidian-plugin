@@ -2113,6 +2113,38 @@ export class OpenCodeChatView extends ItemView {
 		}
 	}
 
+	/** Desktop push notification when a turn finishes out of focus. */
+	private notifyTurnDone(tab: TabState, failed: boolean): void {
+		const s = this.plugin.settings;
+		if (!s.notifyOnDone) return;
+		// Only when Obsidian is not focused; focused users see the chat itself.
+		if (typeof document !== "undefined" && document.hasFocus()) return;
+		const N = (window as { Notification?: typeof Notification }).Notification;
+		if (!N || N.permission !== "granted") return;
+		try {
+			const title =
+				(tab.title && tab.title !== "New session" ? tab.title : "OpenCode") +
+				(failed ? " — failed" : " — done");
+			let body = "";
+			if (s.notifyWithContent) {
+				const last = [...tab.messages].reverse().find((m) => m.role === "assistant");
+				const text = last?.text ?? "";
+				body = text ? (text.length > 220 ? `${text.slice(0, 217)}…` : text) : "";
+			}
+			const n = new N(title, { body, silent: false });
+			n.onclick = () => {
+				try {
+					window.focus();
+					void this.plugin.activateView();
+				} catch {
+					/* ignore */
+				}
+			};
+		} catch {
+			/* notifications are best-effort */
+		}
+	}
+
 	private handleEvent(raw: Record<string, unknown>): void {
 		const type = String(raw.type ?? "");
 		const data = (raw.data ?? {}) as Record<string, unknown>;
@@ -2200,7 +2232,12 @@ export class OpenCodeChatView extends ItemView {
 					}
 					// Re-hydrate from server so CLI-written turns appear too.
 					tab.loaded = false;
-					void this.ensureLoaded(tab);
+					void this.ensureLoaded(tab).then(() => {
+						// Notify only for turns the user is not watching.
+						if (tab.tabId !== this.activeTabId) {
+							this.notifyTurnDone(tab, type === "session.execution.failed");
+						}
+					});
 					void this.refreshHistory();
 					// A queued follow-up goes out now that the agent is free.
 					void this.flushQueueFor(tab);

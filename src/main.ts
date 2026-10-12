@@ -89,6 +89,20 @@ export default class OpenCodePlugin extends Plugin {
 		await super.saveData(data);
 	}
 
+	/** Ask the renderer for permission once (Electron maps this to an OS prompt). */
+	async requestNotificationPermission(): Promise<void> {
+		try {
+			const N = (window as { Notification?: typeof Notification }).Notification;
+			if (!N) {
+				new Notice("System notifications are unavailable in this environment.");
+				return;
+			}
+			if (N.permission === "default") await N.requestPermission();
+		} catch {
+			/* notifications are optional */
+		}
+	}
+
 	chatView(): OpenCodeChatView | null {
 		const leaves = this.app.workspace.getLeavesOfType(VIEW_TYPE_OPENCODE);
 		return (leaves[0]?.view as OpenCodeChatView | undefined) ?? null;
@@ -212,6 +226,25 @@ class OpenCodeSettingTab extends PluginSettingTab {
 						await this.plugin.saveSettings();
 						this.plugin.chatView()?.applyFontSize();
 					}),
+			);
+		new Setting(containerEl)
+			.setName("Push notifications")
+			.setDesc("Notify when an agent finishes a response while Obsidian is not focused.")
+			.addToggle((t) =>
+				t.setValue(this.plugin.settings.notifyOnDone).onChange(async (v) => {
+					this.plugin.settings.notifyOnDone = v;
+					await this.plugin.saveSettings();
+					if (v) await this.plugin.requestNotificationPermission();
+				}),
+			);
+		new Setting(containerEl)
+			.setName("Notification content")
+			.setDesc("Include the start of the response (or the whole answer when it is short). Off = generic notification.")
+			.addToggle((t) =>
+				t.setValue(this.plugin.settings.notifyWithContent).onChange(async (v) => {
+					this.plugin.settings.notifyWithContent = v;
+					await this.plugin.saveSettings();
+				}),
 			);
 		new Setting(containerEl)
 			.setName("LaTeX math hint")
