@@ -2265,10 +2265,9 @@ export class OpenCodeChatView extends ItemView {
 					// Re-hydrate from server so CLI-written turns appear too.
 					tab.loaded = false;
 					void this.ensureLoaded(tab).then(() => {
-						// Notify only for turns the user is not watching.
-						if (tab.tabId !== this.activeTabId) {
-							this.notifyTurnDone(tab, type === "session.execution.failed");
-						}
+						// Notify whenever Obsidian is not focused — notifyTurnDone
+						// itself checks the setting and the focus state.
+						this.notifyTurnDone(tab, type === "session.execution.failed");
 					});
 					void this.refreshHistory();
 					// A queued follow-up goes out now that the agent is free.
