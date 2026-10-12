@@ -867,7 +867,7 @@ export class OpenCodeChatView extends ItemView {
 		const parts = [`${fmtTokens(total)} tok`, `$${fmtCost(tab.usageCost)}`];
 		const limit = this.contextLimit();
 		if (limit && limit > 0) {
-			parts.push(`${Math.min(999, Math.round((total / limit) * 100))}% ctx`);
+			parts.push(`${Math.min(100, Math.round((total / limit) * 100))}% ctx`);
 		}
 		this.usageBadge.textContent = parts.join(" · ");
 		this.usageBadge.title = `Tokens: ${total}\nCost: $${tab.usageCost}\nContext: ${limit ? `${total} / ${limit}` : "unknown limit"}`;
@@ -1154,18 +1154,21 @@ export class OpenCodeChatView extends ItemView {
 			tab.messages = [];
 			tab.loaded = true;
 		}
+		// Usage: cost is cumulative (session total), but the token count shown
+		// must be the LAST turn's context — the session token sum is cumulative
+		// over every turn and wildly overstates the current context window.
 		try {
 			const info = (await client.session.get({
 				sessionID: tab.sessionId,
-			} as never)) as unknown as {
-				cost?: number;
-				tokens?: { input?: number; output?: number; cache?: { read?: number } };
-			};
-			if (typeof info.cost === "number" || info.tokens) {
-				tab.usageCost = info.cost ?? 0;
-				tab.usageInput = info.tokens?.input ?? 0;
-				tab.usageOutput = info.tokens?.output ?? 0;
-				tab.usageCache = info.tokens?.cache?.read ?? 0;
+			} as never)) as unknown as { cost?: number };
+			const lastTurn = [...tab.messages]
+				.reverse()
+				.find((m) => m.role === "assistant" && m.tokens);
+			if (typeof info.cost === "number" || lastTurn?.tokens) {
+				tab.usageCost = typeof info.cost === "number" ? info.cost : 0;
+				tab.usageInput = lastTurn?.tokens?.input ?? 0;
+				tab.usageOutput = lastTurn?.tokens?.output ?? 0;
+				tab.usageCache = lastTurn?.tokens?.cache ?? 0;
 				tab.usageHaveData = true;
 			}
 		} catch {
@@ -2414,17 +2417,28 @@ export class OpenCodeChatView extends ItemView {
 				}
 				break;
 			}
-			case "session.usage.updated": {
+			case "session.step.ended": {
+				// Per-step usage is the current context (what the CLI shows);
+				// session.usage.updated carries cumulative totals.
 				if (tab) {
 					const tokens = data.tokens as
-						| { input?: number; output?: number; cache?: { read?: number } }
+						| {
+								input?: number;
+								output?: number;
+								cache?: { read?: number; write?: number };
+						  }
 						| undefined;
 					const cost = data.cost as { value?: number } | number | undefined;
-					tab.usageCost = typeof cost === "number" ? cost : (cost?.value ?? 0);
-					tab.usageInput = tokens?.input ?? 0;
-					tab.usageOutput = tokens?.output ?? 0;
-					tab.usageCache = tokens?.cache?.read ?? 0;
-					tab.usageHaveData = true;
+					if (typeof cost === "number" || cost?.value !== undefined) {
+						const costTotal = typeof cost === "number" ? cost : (cost?.value ?? 0);
+						if (typeof costTotal === "number") tab.usageCost = costTotal;
+					}
+					if (tokens) {
+						tab.usageInput = tokens.input ?? 0;
+						tab.usageOutput = tokens.output ?? 0;
+						tab.usageCache = tokens.cache?.read ?? 0;
+						tab.usageHaveData = true;
+					}
 					if (tab.tabId === this.activeTabId) this.updateUsageBadge();
 				}
 				break;

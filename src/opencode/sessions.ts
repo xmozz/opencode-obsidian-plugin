@@ -39,6 +39,10 @@ export interface ChatMessage {
 	durationSeconds?: number;
 	/** Provider/model error reported for this turn (rendered as an error block). */
 	error?: string;
+	/** Per-message token usage (that turn's context, not the session total). */
+	tokens?: { input: number; output: number; cache: number };
+	/** Per-message cost in USD. */
+	cost?: number;
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -285,15 +289,29 @@ function parseMessage(m: AnyRecord): ChatMessage[] {
 				...(Number.isFinite(completed) && completed >= created
 					? { durationSeconds: Math.max(0, (completed - created) / 1000) }
 					: {}),
+				...perMessageUsage(m),
 			},
 		];
 	}
 	return [];
 }
 
+/** Per-message token usage: the context that turn actually used. */
+function perMessageUsage(m: AnyRecord): { tokens?: ChatMessage["tokens"]; cost?: number } {
+	const t = m.tokens as AnyRecord | undefined;
+	if (!t || typeof t !== "object") return {};
+	const input = Number(t.input ?? 0) || 0;
+	const output = Number(t.output ?? 0) || 0;
+	const cache = Number((t.cache as AnyRecord | undefined)?.read ?? 0) || 0;
+	const tokens = { input, output, cache };
+	return {
+		tokens,
+		...(typeof m.cost === "number" ? { cost: m.cost } : {}),
+	};
+}
+
 /** Pulls the provider error text out of an assistant message, if any. */
-function extractMessageError(m: AnyRecord): string | undefined {
-	const err = m.error as AnyRecord | undefined;
+function extractMessageError(m: AnyRecord): string | undefined {	const err = m.error as AnyRecord | undefined;
 	if (err && typeof err === "object") {
 		const message = typeof err.message === "string" ? err.message.trim() : "";
 		const type = typeof err.type === "string" ? err.type.trim() : "";
