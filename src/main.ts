@@ -223,7 +223,7 @@ class OpenCodeSettingTab extends PluginSettingTab {
 					.onChange(async (v) => {
 						this.plugin.settings.permissionMode = v as PluginSettings["permissionMode"];
 						await this.plugin.saveSettings();
-						this.plugin.chatView()?.renderApproveBtn();
+						this.plugin.chatView()?.applyPermissionMode();
 					}),
 			);
 		new Setting(containerEl)

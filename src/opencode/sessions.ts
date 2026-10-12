@@ -52,6 +52,33 @@ function normalizeDir(dir: string): string {
 	return dir.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
 }
 
+export type PermissionMode = "full" | "safe" | "vault";
+
+export interface PermissionRule {
+	action: string;
+	resource: string;
+	effect: "allow" | "ask" | "deny";
+}
+
+/**
+ * Maps a plugin permission mode to an opencode per-session permission ruleset.
+ * Rules are evaluated last-match-wins, so the specific `external_directory`
+ * guard overrides the `*` wildcard in vault mode.
+ */
+export function permissionRulesForMode(mode: PermissionMode): PermissionRule[] {
+	switch (mode) {
+		case "full":
+			return [{ action: "*", resource: "*", effect: "allow" }];
+		case "safe":
+			return [{ action: "*", resource: "*", effect: "ask" }];
+		case "vault":
+			return [
+				{ action: "*", resource: "*", effect: "allow" },
+				{ action: "external_directory", resource: "*", effect: "ask" },
+			];
+	}
+}
+
 export interface VaultSessionPage {
 	sessions: VaultSession[];
 	/** Cursor for the next page, or null when there are no more sessions. */
@@ -104,11 +131,13 @@ export async function createVaultSession(
 	model?: { providerID: string; id: string },
 	agent?: string,
 	title?: string,
+	permissions?: PermissionRule[],
 ): Promise<VaultSession> {
 	const input: AnyRecord = { location: { directory: vaultDir } };
 	if (model) input.model = model;
 	if (agent) input.agent = agent;
 	if (title) input.title = title;
+	if (permissions) input.permissions = permissions;
 	const s = (await client.session.create(
 		input as Parameters<OpenCodeClient["session"]["create"]>[0],
 	)) as unknown as AnyRecord;
@@ -488,6 +517,17 @@ export async function interruptSession(
 	await client.session.interrupt({ sessionID } as Parameters<
 		OpenCodeClient["session"]["interrupt"]
 	>[0]);
+}
+
+export async function updateSessionPermissions(
+	client: OpenCodeClient,
+	sessionID: string,
+	permissions: PermissionRule[],
+): Promise<void> {
+	await client.session.update({
+		sessionID,
+		permissions,
+	} as unknown as Parameters<OpenCodeClient["session"]["update"]>[0]);
 }
 
 export async function switchModel(

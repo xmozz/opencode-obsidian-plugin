@@ -14,6 +14,8 @@ import {
 	switchAgent,
 	runSessionCommand,
 	replyPermission,
+	permissionRulesForMode,
+	updateSessionPermissions,
 	ensureMathInstruction,
 	appendCurrentNote,
 	appendContextFiles,
@@ -85,17 +87,6 @@ function newTabId(): string {
 	tabCounter += 1;
 	return `tab-${Date.now().toString(36)}-${tabCounter}`;
 }
-
-/** Actions that always require an explicit decision, even in vault-only mode. */
-const SHELL_OR_NETWORK_ACTIONS = new Set([
-	"bash",
-	"shell",
-	"exec",
-	"webfetch",
-	"websearch",
-	"todowrite",
-	"todoread",
-]);
 
 function el<K extends keyof HTMLElementTagNameMap>(
 	tag: K,
@@ -533,38 +524,26 @@ export class OpenCodeChatView extends ItemView {
 					.onClick(() => {
 						this.plugin.settings.permissionMode = m.value;
 						void this.plugin.saveSettings();
-						this.renderApproveBtn();
+						this.applyPermissionMode();
 					}),
 			);
 		}
 		menu.showAtMouseEvent(e);
 	}
 
-	/** Decides whether a permission request is auto-approved under the current mode. */
-	private shouldAutoApprove(data: Record<string, unknown>): boolean {
-		const mode = this.plugin.settings.permissionMode;
-		if (mode === "full") return true;
-		if (mode === "safe") return false;
-		// Vault mode: auto-approve file access that stays inside the vault. Shell
-		// and network actions always ask, and anything outside the vault asks.
-		const action = String(data.action ?? "");
-		if (SHELL_OR_NETWORK_ACTIONS.has(action)) return false;
-		const resources = Array.isArray(data.resources) ? (data.resources as unknown[]) : [];
-		if (resources.length === 0) return false;
-		return resources.every((r) => this.resourceInVault(String(r)));
-	}
-
-	/** True when a permission resource path points inside the vault. */
-	private resourceInVault(resource: string): boolean {
-		const vault = this.plugin.vaultDir().replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
-		if (!vault) return false;
-		const norm = resource.replace(/\\/g, "/");
-		if (isAbsolutePath(norm)) {
-			const lower = norm.toLowerCase();
-			return lower === vault || lower.startsWith(`${vault}/`);
+	/**
+	 * Applies the current permission mode to every open session and refreshes
+	 * the shield button. Called on mode change and after (re)connecting.
+	 */
+	applyPermissionMode(): void {
+		this.renderApproveBtn();
+		const client = this.plugin.client;
+		if (!client) return;
+		const rules = permissionRulesForMode(this.plugin.settings.permissionMode);
+		for (const t of this.tabs) {
+			if (t.sessionId.startsWith("pending-")) continue;
+			void updateSessionPermissions(client, t.sessionId, rules).catch(() => {});
 		}
-		// Relative paths resolve against the vault unless they escape via "..".
-		return !norm.split("/").includes("..");
 	}
 
 	// ---------- tabs (UI-only; sessions live in opencode, not in files) ----------
@@ -663,6 +642,7 @@ export class OpenCodeChatView extends ItemView {
 		const vaultDir = this.plugin.vaultDir();
 		let sid = sessionId;
 		let t = title ?? "New session";
+		const isExistingSession = !!sessionId;
 		// Per-tab model/agent selection: explicit override, otherwise inherit the
 		// active tab's choice, otherwise the global default.
 		const modelChoice = model ?? this.activeTab()?.model ?? this.plugin.settings.model;
@@ -679,6 +659,8 @@ export class OpenCodeChatView extends ItemView {
 					vaultDir,
 					modelChoice ? parseModelRef(modelChoice) ?? undefined : undefined,
 					agentChoice || undefined,
+					undefined,
+					permissionRulesForMode(this.plugin.settings.permissionMode),
 				);
 				sid = created.id;
 				t = created.title;
@@ -725,6 +707,19 @@ export class OpenCodeChatView extends ItemView {
 		this.refreshPickers();
 		this.persistTabs();
 		if (sid) void this.ensureLoaded(tab);
+		// Existing sessions (opened from history) get the current permission mode.
+		if (isExistingSession && sid) this.applyPermissionsToTab(tab);
+	}
+
+	/** Syncs a single session's permission rules to the current mode. */
+	private applyPermissionsToTab(tab: TabState): void {
+		const client = this.plugin.client;
+		if (!client || tab.sessionId.startsWith("pending-")) return;
+		void updateSessionPermissions(
+			client,
+			tab.sessionId,
+			permissionRulesForMode(this.plugin.settings.permissionMode),
+		).catch(() => {});
 	}
 
 	private closeTab(tabId: string): void {
@@ -1537,7 +1532,10 @@ export class OpenCodeChatView extends ItemView {
 				this.renderTabs();
 				this.renderContent();
 				try {
-					await client.session.compact({ sessionID: tab.sessionId } as never);
+					await client.session.compact({
+						sessionID: tab.sessionId,
+						delivery: "steer",
+					} as never);
 					// Compaction runs asynchronously; the event loop finalizes the
 					// tab when session.compaction.ended/failed arrives.
 				} catch (e) {
@@ -1640,7 +1638,8 @@ export class OpenCodeChatView extends ItemView {
 			const name = `/${c.name}`;
 			if (name.toLowerCase().startsWith(`/${prefix}`) && !seen.has(name)) {
 				seen.add(name);
-				items.push({ name, hint: c.description || "opencode command", takesArg: true });
+				// Native commands run immediately on selection (no extra Enter).
+				items.push({ name, hint: c.description || "opencode command", takesArg: false });
 			}
 		}
 		if (items.length === 0) {
@@ -1673,8 +1672,15 @@ export class OpenCodeChatView extends ItemView {
 		const item = this.slashItems[this.slashIndex];
 		this.closeSlashMenu();
 		if (!item) return;
-		this.composerText.value = item.takesArg ? `${item.name} ` : item.name;
+		if (item.takesArg) {
+			this.composerText.value = `${item.name} `;
+			this.composerText.focus();
+			return;
+		}
+		// No-argument commands execute immediately on selection (no second Enter).
+		this.composerText.value = item.name;
 		this.composerText.focus();
+		void this.sendCurrent();
 	}
 
 	private closeSlashMenu(): void {
@@ -2606,15 +2612,7 @@ export class OpenCodeChatView extends ItemView {
 				break;
 			}
 			case "permission.asked": {
-				const client = this.plugin.client;
 				const requestID = String(data.id ?? "");
-				if (client && requestID && this.shouldAutoApprove(data)) {
-					const sid = String(data.sessionID ?? tab?.sessionId ?? "");
-					if (sid) {
-						void replyPermission(client, sid, requestID, "once").catch(() => {});
-					}
-					break;
-				}
 				if (tab && tab.tabId === this.activeTabId) {
 					this.renderPermissionCard(tab, {
 						requestID,
@@ -2792,6 +2790,8 @@ export class OpenCodeChatView extends ItemView {
 		void this.refreshHistory();
 		this.startEventLoop();
 		void this.flushQueue();
+		// Apply the current permission mode to any sessions restored on load.
+		this.applyPermissionMode();
 	}
 }
 
