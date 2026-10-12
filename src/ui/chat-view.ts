@@ -1097,6 +1097,18 @@ export class OpenCodeChatView extends ItemView {
 	}
 
 	private renderMessage(m: ChatMessage): HTMLElement {
+		if (m.role === "compaction") {
+			// Distinct "session compacted" divider carrying the CLI's summary.
+			const wrap = el("div", "ocs-msg ocs-compaction");
+			const meta = el("div", "ocs-msg-meta", `🧹 Session compacted · ${fmtTime(m.timestamp)}`);
+			const bubble = el("div", "ocs-bubble");
+			const body = el("div", "ocs-msg-body");
+			this.renderBodyText(body, m.text);
+			bubble.appendChild(body);
+			wrap.appendChild(bubble);
+			wrap.appendChild(meta);
+			return wrap;
+		}
 		const wrap = el("div", `ocs-msg ocs-${m.role}`);
 		const meta = el("div", "ocs-msg-meta");
 		const stamp = fmtTime(m.timestamp) + (m.durationSeconds !== undefined ? ` · ${fmtDuration(m.durationSeconds)}` : "");
@@ -1460,6 +1472,9 @@ export class OpenCodeChatView extends ItemView {
 		if (!this.plugin.client) return;
 		let sent = 0;
 		for (const tab of this.tabs) {
+			// Ensure history is loaded first so the optimistic bubble is not
+			// overwritten by a concurrent reload.
+			if (!tab.loaded) await this.ensureLoaded(tab);
 			if (await this.flushQueueFor(tab)) sent++;
 		}
 		if (sent > 0) {
@@ -2183,8 +2198,7 @@ export class OpenCodeChatView extends ItemView {
 						tab.attention = true;
 						this.renderTabs();
 					}
-					void this.ensureLoaded(tab);
-					void this.flushQueueFor(tab);
+					void this.ensureLoaded(tab).then(() => void this.flushQueueFor(tab));
 				}
 			} catch {
 				/* session may be gone; leave the tab as is */
@@ -2460,16 +2474,17 @@ export class OpenCodeChatView extends ItemView {
 						tab.attention = true;
 						this.renderTabs();
 					}
-					// Re-hydrate from server so CLI-written turns appear too.
+					// Re-hydrate from server so CLI-written turns appear too, then
+					// flush any queued follow-up (sequentially so the optimistic
+					// bubble is not overwritten by the reload).
 					tab.loaded = false;
 					void this.ensureLoaded(tab).then(() => {
 						// Notify whenever Obsidian is not focused — notifyTurnDone
 						// itself checks the setting and the focus state.
 						this.notifyTurnDone(tab, type === "session.execution.failed");
+						void this.flushQueueFor(tab);
 					});
 					void this.refreshHistory();
-					// A queued follow-up goes out now that the agent is free.
-					void this.flushQueueFor(tab);
 				}
 				break;
 			}
@@ -2497,8 +2512,7 @@ export class OpenCodeChatView extends ItemView {
 						this.renderTabs();
 					}
 					tab.loaded = false;
-					void this.ensureLoaded(tab);
-					void this.flushQueueFor(tab);
+					void this.ensureLoaded(tab).then(() => void this.flushQueueFor(tab));
 				}
 				break;
 			}

@@ -30,7 +30,7 @@ export interface ChatPart {
 
 export interface ChatMessage {
 	id: string;
-	role: "user" | "assistant";
+	role: "user" | "assistant" | "compaction";
 	text: string;
 	reasoning: string[];
 	tools: ChatPart[];
@@ -329,6 +329,21 @@ function parseMessage(m: AnyRecord): ChatMessage[] {
 					? { durationSeconds: Math.max(0, (completed - created) / 1000) }
 					: {}),
 				...perMessageUsage(m),
+			},
+		];
+	}
+	if (type === "compaction") {
+		// Surface the compaction summary in the chat (same output the CLI shows).
+		const summary = String(m.summary ?? "").trim();
+		if (!summary) return [];
+		return [
+			{
+				id: String(m.id ?? `compaction-${ts}`),
+				role: "compaction",
+				text: summary,
+				reasoning: [],
+				tools: [],
+				timestamp: ts,
 			},
 		];
 	}
