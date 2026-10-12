@@ -1030,6 +1030,9 @@ export class OpenCodeChatView extends ItemView {
 			}
 			bubble.appendChild(body);
 		}
+		if (m.error) {
+			bubble.appendChild(el("div", "ocs-error-block", `Error: ${m.error}`));
+		}
 		wrap.appendChild(bubble);
 		wrap.appendChild(meta);
 		return wrap;
@@ -2184,6 +2187,32 @@ export class OpenCodeChatView extends ItemView {
 						t.title = title;
 						this.renderTabs();
 					}
+				}
+				break;
+			}
+			case "session.step.failed": {
+				if (tab) {
+					const err = data.error as { message?: string; type?: string } | undefined;
+					const text =
+						(typeof err?.message === "string" && err.message.trim()) ||
+						(typeof err?.type === "string" && err.type.trim()) ||
+						"The model returned an error.";
+					const live = this.ensureLiveAssistant(tab);
+					live.appendChild(el("div", "ocs-error-block", `Error: ${text}`));
+				}
+				break;
+			}
+			case "session.retry.scheduled": {
+				if (tab) {
+					const err = data.error as { message?: string } | undefined;
+					const live = this.ensureLiveAssistant(tab);
+					live.appendChild(
+						el(
+							"div",
+							"ocs-retry-note",
+							`Retrying (attempt ${String(data.attempt ?? "?")})…${err?.message ? ` — ${err.message}` : ""}`,
+						),
+					);
 				}
 				break;
 			}

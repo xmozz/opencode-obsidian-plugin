@@ -341,6 +341,21 @@ button.ocs-copy-btn:active {
 	margin: 8px 0 4px;
 }
 
+.ocs-error-block {
+	color: var(--text-error, #f85149);
+	font-family: var(--font-monospace);
+	font-size: calc(var(--ocs-fs, 13px) - 1px);
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+	margin-top: 2px;
+}
+
+.ocs-retry-note {
+	color: var(--text-warning, orange);
+	font-size: calc(var(--ocs-fs, 13px) - 2px);
+	margin-top: 2px;
+}
+
 .ocs-code {
 	background: var(--background-secondary);
 	border: 1px solid var(--background-modifier-border);

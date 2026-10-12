@@ -37,6 +37,8 @@ export interface ChatMessage {
 	timestamp: number;
 	/** Turn duration in seconds (assistant only, when the server reports it). */
 	durationSeconds?: number;
+	/** Provider/model error reported for this turn (rendered as an error block). */
+	error?: string;
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -265,9 +267,12 @@ function parseMessage(m: AnyRecord): ChatMessage[] {
 			}
 		}
 		const text = texts.join("").trim();
-		if (!text && reasoning.length === 0 && tools.length === 0) return [];
 		const created = Number(m.time?.created ?? ts);
 		const completed = Number(m.time?.completed ?? NaN);
+		const errorText = extractMessageError(m);
+		if (!text && reasoning.length === 0 && tools.length === 0 && !errorText) {
+			return [];
+		}
 		return [
 			{
 				id: String(m.id ?? `asst-${ts}`),
@@ -276,6 +281,7 @@ function parseMessage(m: AnyRecord): ChatMessage[] {
 				reasoning,
 				tools,
 				timestamp: ts,
+				...(errorText ? { error: errorText } : {}),
 				...(Number.isFinite(completed) && completed >= created
 					? { durationSeconds: Math.max(0, (completed - created) / 1000) }
 					: {}),
@@ -283,6 +289,21 @@ function parseMessage(m: AnyRecord): ChatMessage[] {
 		];
 	}
 	return [];
+}
+
+/** Pulls the provider error text out of an assistant message, if any. */
+function extractMessageError(m: AnyRecord): string | undefined {
+	const err = m.error as AnyRecord | undefined;
+	if (err && typeof err === "object") {
+		const message = typeof err.message === "string" ? err.message.trim() : "";
+		const type = typeof err.type === "string" ? err.type.trim() : "";
+		if (message) return message;
+		if (type) return type;
+	}
+	if (m.finish === "error" && typeof m.rawFinish === "string" && m.rawFinish.trim()) {
+		return m.rawFinish.trim();
+	}
+	return undefined;
 }
 
 export interface DiffLine {
