@@ -137,11 +137,11 @@ export async function renameSession(
 export async function forkSession(
 	client: OpenCodeClient,
 	sessionID: string,
-	messageID?: string,
+	before?: string,
 ): Promise<VaultSession> {
 	const s = (await client.session.fork({
 		sessionID,
-		...(messageID ? { messageID } : {}),
+		...(before ? { before } : {}),
 	} as Parameters<OpenCodeClient["session"]["fork"]>[0])) as unknown as AnyRecord;
 	return {
 		id: String(s.id),
@@ -522,12 +522,14 @@ export async function runSessionCommand(
 
 export async function replyPermission(
 	client: OpenCodeClient,
+	sessionID: string,
 	requestID: string,
-	reply: "accept" | "reject" | "accept-session",
+	decision: "once" | "always" | "reject",
 ): Promise<void> {
 	await client.permission.reply({
+		sessionID,
 		requestID,
-		reply,
+		decision,
 	} as unknown as Parameters<OpenCodeClient["permission"]["reply"]>[0]);
 }
 

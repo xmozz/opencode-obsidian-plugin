@@ -116,7 +116,8 @@ function escapeHtml(s: string): string {
 	return s
 		.replace(/&/g, "&amp;")
 		.replace(/</g, "&lt;")
-		.replace(/>/g, "&gt;");
+		.replace(/>/g, "&gt;")
+		.replace(/"/g, "&quot;");
 }
 
 import { convertLatexCodeToMath } from "./math";
@@ -1401,11 +1402,16 @@ export class OpenCodeChatView extends ItemView {
 			if (cmdName === "compact") {
 				tab.streaming = true;
 				this.renderTabs();
+				this.renderContent();
 				try {
 					await client.session.compact({ sessionID: tab.sessionId } as never);
+					// Compaction runs asynchronously; the event loop finalizes the
+					// tab when session.compaction.ended/failed arrives.
 				} catch (e) {
 					tab.streaming = false;
 					new Notice(`Compact failed: ${errMsg(e)}`);
+					this.renderTabs();
+					this.renderContent();
 				}
 				return;
 			}
@@ -1642,9 +1648,9 @@ export class OpenCodeChatView extends ItemView {
 		const vaultDir = this.plugin.vaultDir();
 		try {
 			const [models, agents, commands] = await Promise.all([
-				client.model.list({ directory: vaultDir } as never) as Promise<unknown>,
-				client.agent.list({ directory: vaultDir } as never) as Promise<unknown>,
-				client.command.list({ directory: vaultDir } as never) as Promise<unknown>,
+				client.model.list({ location: { directory: vaultDir } } as never) as Promise<unknown>,
+				client.agent.list({ location: { directory: vaultDir } } as never) as Promise<unknown>,
+				client.command.list({ location: { directory: vaultDir } } as never) as Promise<unknown>,
 			]);
 			this.models = toArray(models).map((m) => {
 				const r = m as Record<string, unknown>;
@@ -2275,6 +2281,35 @@ export class OpenCodeChatView extends ItemView {
 				}
 				break;
 			}
+			case "session.compaction.started": {
+				if (tab) {
+					tab.streaming = true;
+					this.renderTabs();
+					this.renderSendBtn();
+				}
+				break;
+			}
+			case "session.compaction.ended":
+			case "session.compaction.failed": {
+				if (tab) {
+					tab.streaming = false;
+					if (type === "session.compaction.failed") {
+						const err = (data.error as { message?: string } | undefined)?.message;
+						if (err) new Notice(`Compaction failed: ${err}`);
+					}
+					if (tab.tabId === this.activeTabId) {
+						this.renderContent();
+						this.renderTabs();
+					} else {
+						tab.attention = true;
+						this.renderTabs();
+					}
+					tab.loaded = false;
+					void this.ensureLoaded(tab);
+					void this.flushQueueFor(tab);
+				}
+				break;
+			}
 			case "session.text.started": {
 				if (tab) {
 					const live = this.ensureLiveAssistant(tab);
@@ -2389,7 +2424,10 @@ export class OpenCodeChatView extends ItemView {
 				const client = this.plugin.client;
 				const requestID = String(data.id ?? "");
 				if (auto && client && requestID) {
-					void replyPermission(client, requestID, "accept").catch(() => {});
+					const sid = String(data.sessionID ?? tab?.sessionId ?? "");
+					if (sid) {
+						void replyPermission(client, sid, requestID, "once").catch(() => {});
+					}
 					break;
 				}
 				if (tab && tab.tabId === this.activeTabId) {
@@ -2468,12 +2506,12 @@ export class OpenCodeChatView extends ItemView {
 		const reject = el("button", "ocs-btn", "Deny");
 		accept.onclick = () => {
 			const client = this.plugin.client;
-			if (client) void replyPermission(client, req.requestID, "accept").catch((e) => new Notice(errMsg(e)));
+			if (client) void replyPermission(client, tab.sessionId, req.requestID, "once").catch((e) => new Notice(errMsg(e)));
 			card.remove();
 		};
 		reject.onclick = () => {
 			const client = this.plugin.client;
-			if (client) void replyPermission(client, req.requestID, "reject").catch((e) => new Notice(errMsg(e)));
+			if (client) void replyPermission(client, tab.sessionId, req.requestID, "reject").catch((e) => new Notice(errMsg(e)));
 			card.remove();
 		};
 		row.appendChild(accept);
