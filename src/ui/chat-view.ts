@@ -195,6 +195,15 @@ export class OpenCodeChatView extends ItemView {
 	private queueBar!: HTMLElement;
 	private lastEsc = 0;
 	private liveTools = new Map<string, Map<string, LiveToolState>>();
+	/** Permission requests waiting for a reply, keyed by sessionId. */
+	private pendingPermissions = new Map<
+		string,
+		Array<{ requestID: string; action: string; resources: string[]; message?: string }>
+	>();
+	/** Question forms waiting for an answer, keyed by sessionId. */
+	private pendingForms = new Map<string, Array<Record<string, unknown>>>();
+	private permissionCards = new Map<string, Map<string, HTMLElement>>();
+	private formCards = new Map<string, Map<string, HTMLElement>>();
 
 	constructor(leaf: WorkspaceLeaf, plugin: OpenCodePlugin) {
 		super(leaf);
@@ -725,9 +734,19 @@ export class OpenCodeChatView extends ItemView {
 	private closeTab(tabId: string): void {
 		const idx = this.tabs.findIndex((t) => t.tabId === tabId);
 		if (idx < 0) return;
-		this.tabs.splice(idx, 1);
+		const [removed] = this.tabs.splice(idx, 1);
 		// Queued messages never left the client — discard them with the tab.
 		this.queued = this.queued.filter((q) => q.tabId !== tabId);
+		if (removed && !this.tabs.some((t) => t.sessionId === removed.sessionId)) {
+			this.liveAssistant.get(removed.sessionId)?.remove();
+			this.liveAssistant.delete(removed.sessionId);
+			this.liveReasoning.delete(`${removed.sessionId}-r`);
+			this.liveTools.delete(removed.sessionId);
+			this.pendingPermissions.delete(removed.sessionId);
+			this.pendingForms.delete(removed.sessionId);
+			this.permissionCards.delete(removed.sessionId);
+			this.formCards.delete(removed.sessionId);
+		}
 		this.renderQueueBar();
 		if (this.activeTabId === tabId) {
 			this.activeTabId = this.tabs[Math.max(0, idx - 1)]?.tabId ?? null;
@@ -1089,9 +1108,11 @@ export class OpenCodeChatView extends ItemView {
 			wrap.appendChild(el("div", "ocs-msg-meta", `⏳ queued — will send once opencode is ready · ${fmtTime(q.ts)}`));
 			list.appendChild(wrap);
 		}
-		// live (streaming) containers are appended by the event loop
+		// live (streaming) containers are appended by the event loop;
+		// re-attach the SAME node so a tab switch never loses the stream.
 		const live = this.liveAssistant.get(tab.sessionId);
-		if (live && !live.parentElement) list.appendChild(live);
+		if (live && live.parentElement !== list) list.appendChild(live);
+		this.renderPendingCards(tab);
 		list.scrollTop = list.scrollHeight;
 		this.updateUsageBadge();
 	}
@@ -2216,17 +2237,21 @@ export class OpenCodeChatView extends ItemView {
 
 	private ensureLiveAssistant(tab: TabState): HTMLElement {
 		let live = this.liveAssistant.get(tab.sessionId);
-		if (!live || !live.parentElement) {
+		if (!live) {
 			live = el("div", "ocs-msg ocs-assistant ocs-live");
 			this.liveAssistant.set(tab.sessionId, live);
-			if (tab.tabId === this.activeTabId) {
-				this.messageListEl()?.appendChild(live);
-				const list = this.messageListEl();
-				if (list) list.scrollTop = list.scrollHeight;
-			} else {
-				tab.attention = true;
-				this.renderTabs();
+		}
+		// Re-attach the SAME node when it was detached by a tab switch
+		// (renderContent empties the DOM). Never discard accumulated deltas.
+		if (tab.tabId === this.activeTabId) {
+			const list = this.messageListEl();
+			if (list && live.parentElement !== list) {
+				list.appendChild(live);
+				list.scrollTop = list.scrollHeight;
 			}
+		} else {
+			tab.attention = true;
+			this.renderTabs();
 		}
 		return live;
 	}
@@ -2547,11 +2572,11 @@ export class OpenCodeChatView extends ItemView {
 				if (tab) {
 					const live = this.ensureLiveAssistant(tab);
 					let r = this.liveReasoning.get(`${tab.sessionId}-r`);
-					if (!r || !r.parentElement) {
+					if (!r) {
 						r = el("div", "ocs-live-reasoning");
 						this.liveReasoning.set(`${tab.sessionId}-r`, r);
-						live.appendChild(r);
 					}
+					if (r.parentElement !== live) live.appendChild(r);
 					r.textContent = (r.textContent ?? "") + String(data.delta ?? "");
 				}
 				break;
@@ -2627,8 +2652,8 @@ export class OpenCodeChatView extends ItemView {
 			}
 			case "permission.asked": {
 				const requestID = String(data.id ?? "");
-				if (tab && tab.tabId === this.activeTabId) {
-					this.renderPermissionCard(tab, {
+				if (tab && requestID) {
+					this.rememberPermission(tab.sessionId, {
 						requestID,
 						action: String(data.action ?? "permission"),
 						resources: Array.isArray(data.resources)
@@ -2636,19 +2661,42 @@ export class OpenCodeChatView extends ItemView {
 							: [],
 						message: typeof data.message === "string" ? data.message : undefined,
 					});
-				} else if (tab) {
-					tab.attention = true;
-					this.renderTabs();
+					if (tab.tabId === this.activeTabId) {
+						this.renderPendingCards(tab);
+					} else {
+						tab.attention = true;
+						this.renderTabs();
+					}
 				}
 				break;
 			}
+			case "permission.replied": {
+				// Answered elsewhere (e.g. CLI) — drop the pending card.
+				const sid = String(data.sessionID ?? sessionID ?? "");
+				const rid = String(data.requestID ?? "");
+				if (sid) this.dismissPermission(sid, rid);
+				break;
+			}
 			case "form.created": {
-				if (tab && tab.tabId === this.activeTabId) {
-					this.renderFormCard(tab, (data.form ?? data) as Record<string, unknown>);
-				} else if (tab) {
-					tab.attention = true;
-					this.renderTabs();
+				if (tab) {
+					const form = (data.form ?? data) as Record<string, unknown>;
+					if (form && typeof form.id === "string") {
+						this.rememberForm(tab.sessionId, form);
+						if (tab.tabId === this.activeTabId) {
+							this.renderPendingCards(tab);
+						} else {
+							tab.attention = true;
+							this.renderTabs();
+						}
+					}
 				}
+				break;
+			}
+			case "form.replied":
+			case "form.cancelled": {
+				const sid = String(data.sessionID ?? sessionID ?? "");
+				const fid = String(data.id ?? data.formID ?? "");
+				if (sid) this.dismissForm(sid, fid);
 				break;
 			}
 			case "session.step.ended": {
@@ -2682,13 +2730,83 @@ export class OpenCodeChatView extends ItemView {
 		}
 	}
 
+	private rememberPermission(
+		sessionId: string,
+		req: { requestID: string; action: string; resources: string[]; message?: string },
+	): void {
+		if (!req.requestID) return;
+		const list = this.pendingPermissions.get(sessionId) ?? [];
+		if (!list.some((r) => r.requestID === req.requestID)) {
+			list.push(req);
+			this.pendingPermissions.set(sessionId, list);
+		}
+	}
+
+	private rememberForm(sessionId: string, form: Record<string, unknown>): void {
+		const id = String((form as { id?: unknown }).id ?? "");
+		if (!id) return;
+		const list = this.pendingForms.get(sessionId) ?? [];
+		if (!list.some((f) => String((f as { id?: unknown }).id ?? "") === id)) {
+			list.push(form);
+			this.pendingForms.set(sessionId, list);
+		}
+	}
+
+	private dismissPermission(sessionId: string, requestID: string): void {
+		const list = this.pendingPermissions.get(sessionId);
+		if (list) {
+			this.pendingPermissions.set(
+				sessionId,
+				list.filter((r) => r.requestID !== requestID),
+			);
+		}
+		this.permissionCards.get(sessionId)?.get(requestID)?.remove();
+		this.permissionCards.get(sessionId)?.delete(requestID);
+	}
+
+	private dismissForm(sessionId: string, formID: string): void {
+		const list = this.pendingForms.get(sessionId);
+		if (list) {
+			this.pendingForms.set(
+				sessionId,
+				list.filter((f) => String((f as { id?: unknown }).id ?? "") !== formID),
+			);
+		}
+		this.formCards.get(sessionId)?.get(formID)?.remove();
+		this.formCards.get(sessionId)?.delete(formID);
+	}
+
+	/** Renders all pending permission + question cards for the active tab. */
+	private renderPendingCards(tab: TabState): void {
+		for (const req of this.pendingPermissions.get(tab.sessionId) ?? []) {
+			this.renderPermissionCard(tab, req);
+		}
+		for (const form of this.pendingForms.get(tab.sessionId) ?? []) {
+			this.renderFormCard(tab, form);
+		}
+	}
+
 	private renderPermissionCard(
 		tab: TabState,
 		req: { requestID: string; action: string; resources: string[]; message?: string },
 	): void {
 		const list = this.messageListEl();
 		if (!list) return;
+		let byId = this.permissionCards.get(tab.sessionId);
+		if (!byId) {
+			byId = new Map();
+			this.permissionCards.set(tab.sessionId, byId);
+		}
+		const existing = byId.get(req.requestID);
+		if (existing) {
+			if (existing.parentElement !== list) {
+				list.appendChild(existing);
+				list.scrollTop = list.scrollHeight;
+			}
+			return;
+		}
 		const card = el("div", "ocs-permission-card");
+		byId.set(req.requestID, card);
 		card.appendChild(
 			el("div", "ocs-permission-title", `Permission: ${req.action}`),
 		);
@@ -2700,18 +2818,20 @@ export class OpenCodeChatView extends ItemView {
 		}
 		const row = el("div", "ocs-card-row");
 		const accept = el("button", "ocs-btn ocs-accept", "Allow");
+		const always = el("button", "ocs-btn", "Always");
 		const reject = el("button", "ocs-btn", "Deny");
-		accept.onclick = () => {
+		const reply = (decision: "once" | "always" | "reject") => {
 			const client = this.plugin.client;
-			if (client) void replyPermission(client, tab.sessionId, req.requestID, "once").catch((e) => new Notice(errMsg(e)));
-			card.remove();
+			if (!client) return;
+			replyPermission(client, tab.sessionId, req.requestID, decision)
+				.then(() => this.dismissPermission(tab.sessionId, req.requestID))
+				.catch((e) => new Notice(`Permission reply failed: ${errMsg(e)}`));
 		};
-		reject.onclick = () => {
-			const client = this.plugin.client;
-			if (client) void replyPermission(client, tab.sessionId, req.requestID, "reject").catch((e) => new Notice(errMsg(e)));
-			card.remove();
-		};
+		accept.onclick = () => reply("once");
+		always.onclick = () => reply("always");
+		reject.onclick = () => reply("reject");
 		row.appendChild(accept);
+		row.appendChild(always);
 		row.appendChild(reject);
 		card.appendChild(row);
 		list.appendChild(card);
@@ -2721,39 +2841,153 @@ export class OpenCodeChatView extends ItemView {
 	private renderFormCard(tab: TabState, form: Record<string, unknown>): void {
 		const list = this.messageListEl();
 		if (!list) return;
+		const formID = String((form as { id?: unknown }).id ?? "");
+		if (!formID) return;
+		let byId = this.formCards.get(tab.sessionId);
+		if (!byId) {
+			byId = new Map();
+			this.formCards.set(tab.sessionId, byId);
+		}
+		const existing = byId.get(formID);
+		if (existing) {
+			if (existing.parentElement !== list) {
+				list.appendChild(existing);
+				list.scrollTop = list.scrollHeight;
+			}
+			return;
+		}
+		const rawFields = (form as { fields?: unknown }).fields;
+		const fields = Array.isArray(rawFields)
+			? (rawFields as Array<Record<string, unknown>>)
+			: [];
 		const card = el("div", "ocs-question-card");
+		byId.set(formID, card);
 		const title = el("div", "ocs-question-title", String(form.title ?? "Question"));
 		const chev = el("button", "ocs-icon-btn", "⌄");
 		chev.onclick = () => card.classList.toggle("ocs-collapsed");
 		title.appendChild(chev);
 		card.appendChild(title);
-		const fields = form.fields as Record<string, unknown> | undefined;
-		const answer: Record<string, string | boolean | string[]> = {};
-		if (fields) {
-			for (const [key, f] of Object.entries(fields)) {
-				const fld = f as Record<string, unknown>;
-				const label = String(fld.label ?? key);
-				card.appendChild(el("div", "ocs-field-label", label));
-				const opts = fld.options as { value?: string; label?: string }[] | undefined;
-				if (Array.isArray(opts) && opts.length > 0) {
-					const box = el("div", "ocs-options");
-					for (const o of opts) {
-						const b = el("button", "ocs-btn", String(o.label ?? o.value));
-						b.onclick = () => {
-							answer[key] = String(o.value ?? o.label);
-							b.classList.toggle("ocs-selected");
-						};
-						box.appendChild(b);
+		const answer: Record<string, string | number | boolean | string[]> = {};
+		if (fields.length === 0) {
+			card.appendChild(
+				el("div", "ocs-permission-msg", "No answerable fields — dismissing cannot proceed. Reply via CLI if stuck."),
+			);
+		}
+		for (const fld of fields) {
+			const key = String(fld.key ?? "");
+			if (!key || fld.hidden) continue;
+			const label = String(fld.title ?? fld.label ?? key);
+			card.appendChild(el("div", "ocs-field-label", label));
+			const desc = typeof fld.description === "string" ? fld.description : "";
+			if (desc) card.appendChild(el("div", "ocs-permission-msg", desc));
+			const type = String(fld.type ?? "string");
+			const opts = Array.isArray(fld.options)
+				? (fld.options as Array<{ value?: unknown; label?: unknown; description?: unknown }>)
+				: [];
+			if (typeof fld.default === "string" && fld.default) answer[key] = fld.default;
+			else if (typeof fld.default === "number") answer[key] = fld.default;
+			else if (typeof fld.default === "boolean") answer[key] = fld.default;
+			else if (Array.isArray(fld.default)) answer[key] = (fld.default as unknown[]).map(String);
+			if (type === "multiselect" && opts.length > 0) {
+				const box = el("div", "ocs-options");
+				const selected = new Set<string>(
+					Array.isArray(answer[key]) ? (answer[key] as string[]) : [],
+				);
+				const paint = () => {
+					for (const b of Array.from(box.children) as HTMLElement[]) {
+						const v = b.dataset.value ?? "";
+						b.classList.toggle("ocs-selected", selected.has(v));
 					}
-					card.appendChild(box);
-				} else {
+				};
+				for (const o of opts) {
+					const v = String(o.value ?? o.label ?? "");
+					const b = el("button", "ocs-btn", String(o.label ?? o.value ?? v));
+					b.dataset.value = v;
+					if (typeof o.description === "string" && o.description) b.title = o.description;
+					b.onclick = () => {
+						if (selected.has(v)) selected.delete(v);
+						else selected.add(v);
+						answer[key] = [...selected];
+						paint();
+					};
+					box.appendChild(b);
+				}
+				paint();
+				card.appendChild(box);
+			} else if (opts.length > 0) {
+				// Single-select (the "click on sth" question): exactly one value.
+				const box = el("div", "ocs-options");
+				const paint = () => {
+					for (const b of Array.from(box.children) as HTMLElement[]) {
+						b.classList.toggle("ocs-selected", answer[key] === b.dataset.value);
+					}
+				};
+				for (const o of opts) {
+					const v = String(o.value ?? o.label ?? "");
+					const b = el("button", "ocs-btn", String(o.label ?? o.value ?? v));
+					b.dataset.value = v;
+					if (typeof o.description === "string" && o.description) b.title = o.description;
+					b.onclick = () => {
+						answer[key] = v;
+						paint();
+					};
+					box.appendChild(b);
+				}
+				paint();
+				card.appendChild(box);
+				if (fld.custom) {
 					const input = document.createElement("input");
 					input.className = "ocs-field-input";
+					input.placeholder = "Or type a custom answer…";
 					input.onchange = () => {
 						answer[key] = input.value;
+						paint();
 					};
 					card.appendChild(input);
 				}
+			} else if (type === "boolean") {
+				const box = el("div", "ocs-options");
+				for (const [v, label] of [[true, "Yes"], [false, "No"]] as const) {
+					const b = el("button", "ocs-btn", label);
+					b.onclick = () => {
+						answer[key] = v;
+						for (const x of Array.from(box.children) as HTMLElement[]) {
+							x.classList.toggle("ocs-selected", x === b);
+						}
+					};
+					box.appendChild(b);
+				}
+				card.appendChild(box);
+			} else if (type === "number" || type === "integer") {
+				const input = document.createElement("input");
+				input.className = "ocs-field-input";
+				input.type = "number";
+				if (typeof fld.default === "number") input.value = String(fld.default);
+				input.onchange = () => {
+					const n = Number(input.value);
+					if (input.value !== "" && Number.isFinite(n)) answer[key] = n;
+					else delete answer[key];
+				};
+				card.appendChild(input);
+			} else if (type === "external") {
+				const url = typeof fld.url === "string" ? fld.url : "";
+				if (url) {
+					const a = document.createElement("a");
+					a.href = url;
+					a.textContent = url;
+					a.target = "_blank";
+					a.rel = "noopener";
+					card.appendChild(a);
+				}
+			} else {
+				const input = document.createElement("input");
+				input.className = "ocs-field-input";
+				if (typeof fld.placeholder === "string") input.placeholder = fld.placeholder;
+				if (typeof fld.default === "string") input.value = fld.default;
+				input.onchange = () => {
+					answer[key] = input.value;
+				};
+				card.appendChild(input);
 			}
 		}
 		const row = el("div", "ocs-card-row");
@@ -2761,14 +2995,30 @@ export class OpenCodeChatView extends ItemView {
 		submit.onclick = () => {
 			const client = this.plugin.client;
 			if (!client) return;
+			// Required-field validation so the server cannot reject us.
+			for (const fld of fields) {
+				const key = String(fld.key ?? "");
+				if (!key || fld.hidden || !fld.required) continue;
+				const v = answer[key];
+				const empty =
+					v === undefined || v === "" || (Array.isArray(v) && v.length === 0);
+				if (empty) {
+					new Notice(`Please answer "${String(fld.title ?? key)}" before submitting.`);
+					return;
+				}
+			}
+			submit.setAttribute("disabled", "true");
 			void client.session.form
 				.reply({
 					sessionID: tab.sessionId,
-					formID: String(form.id ?? ""),
+					formID,
 					answer,
 				} as never)
-				.catch((e: unknown) => new Notice(errMsg(e)));
-			card.remove();
+				.then(() => this.dismissForm(tab.sessionId, formID))
+				.catch((e: unknown) => {
+					submit.removeAttribute("disabled");
+					new Notice(`Answer failed (kept for retry): ${errMsg(e)}`);
+				});
 		};
 		row.appendChild(submit);
 		card.appendChild(row);
