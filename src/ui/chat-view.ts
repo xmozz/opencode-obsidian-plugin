@@ -187,6 +187,9 @@ export class OpenCodeChatView extends ItemView {
 	private eventAbort: AbortController | null = null;
 	private liveAssistant = new Map<string, HTMLElement>();
 	private liveReasoning = new Map<string, HTMLElement>();
+	/** Current (tail) live text block per session, to fork a new block when
+	 *  text resumes after a tool/reasoning card instead of updating old position. */
+	private liveText = new Map<string, { msgId: string; node: HTMLElement }>();
 	private queued: Array<{ tabId: string; text: string; ts: number }> = [];
 	private slashMenu!: HTMLElement;
 	private slashOpen = false;
@@ -741,6 +744,7 @@ export class OpenCodeChatView extends ItemView {
 			this.liveAssistant.get(removed.sessionId)?.remove();
 			this.liveAssistant.delete(removed.sessionId);
 			this.liveReasoning.delete(`${removed.sessionId}-r`);
+			this.liveText.delete(removed.sessionId);
 			this.liveTools.delete(removed.sessionId);
 			this.pendingPermissions.delete(removed.sessionId);
 			this.pendingForms.delete(removed.sessionId);
@@ -2235,6 +2239,13 @@ export class OpenCodeChatView extends ItemView {
 		return this.content.querySelector(".ocs-message-list");
 	}
 
+	/** Scrolls the active message list to the bottom (stick-to-bottom while streaming). */
+	private scrollLiveToBottom(tab: TabState): void {
+		if (tab.tabId !== this.activeTabId) return;
+		const list = this.messageListEl();
+		if (list) list.scrollTop = list.scrollHeight;
+	}
+
 	private ensureLiveAssistant(tab: TabState): HTMLElement {
 		let live = this.liveAssistant.get(tab.sessionId);
 		if (!live) {
@@ -2309,6 +2320,7 @@ export class OpenCodeChatView extends ItemView {
 		if (patch.status !== undefined) st.status = patch.status;
 		if (patch.output !== undefined) st.output = patch.output;
 		this.paintLiveTool(st);
+		this.scrollLiveToBottom(tab);
 		return st;
 	}
 
@@ -2476,7 +2488,8 @@ export class OpenCodeChatView extends ItemView {
 					if (live) {
 						live.remove();
 						this.liveAssistant.delete(tab.sessionId);
-						this.liveReasoning.delete(tab.sessionId);
+						this.liveReasoning.delete(`${tab.sessionId}-r`);
+						this.liveText.delete(tab.sessionId);
 					}
 					this.liveTools.delete(tab.sessionId);
 					if (type === "session.execution.failed") {
@@ -2547,37 +2560,63 @@ export class OpenCodeChatView extends ItemView {
 					const d = el("div", "ocs-live-text");
 					d.dataset.msg = String(data.assistantMessageID ?? "");
 					live.appendChild(d);
+					this.liveText.set(tab.sessionId, {
+						msgId: String(data.assistantMessageID ?? ""),
+						node: d,
+					});
+					this.scrollLiveToBottom(tab);
 				}
 				break;
 			}
 			case "session.text.delta": {
 				if (tab) {
 					const live = this.ensureLiveAssistant(tab);
-					let target = live.querySelector(
-						`.ocs-live-text[data-msg="${cssEsc(String(data.assistantMessageID ?? ""))}"]`,
-					) as HTMLElement | null;
-					if (!target) {
-						target = el("div", "ocs-live-text");
-						live.appendChild(target);
+					const msgId = String(data.assistantMessageID ?? "");
+					const cur = this.liveText.get(tab.sessionId);
+					let target: HTMLElement | null = null;
+					// Reuse the tail block only while it is still the last block.
+					// If a tool/reasoning card was appended after it, fork a new
+					// text block at the bottom so the order matches the final view.
+					if (cur && cur.msgId === msgId && live.lastElementChild === cur.node) {
+						target = cur.node;
+					} else {
+						// Fall back to the block for this message when it is still
+						// the tail (e.g. after a tab switch re-attached the node).
+						const found = live.querySelector(
+							`.ocs-live-text[data-msg="${cssEsc(msgId)}"]`,
+						) as HTMLElement | null;
+						if (found && live.lastElementChild === found) {
+							target = found;
+						} else {
+							target = el("div", "ocs-live-text");
+							target.dataset.msg = msgId;
+							live.appendChild(target);
+						}
+						this.liveText.set(tab.sessionId, { msgId, node: target });
 					}
 					target.textContent = (target.textContent ?? "") + String(data.delta ?? "");
-					if (tab.tabId === this.activeTabId) {
-						const list = this.messageListEl();
-						if (list) list.scrollTop = list.scrollHeight;
-					}
+					this.scrollLiveToBottom(tab);
 				}
 				break;
 			}
 			case "session.reasoning.delta": {
 				if (tab) {
 					const live = this.ensureLiveAssistant(tab);
-					let r = this.liveReasoning.get(`${tab.sessionId}-r`);
-					if (!r) {
+					const key = `${tab.sessionId}-r`;
+					let r = this.liveReasoning.get(key);
+					if (!r || r.parentElement !== live) {
 						r = el("div", "ocs-live-reasoning");
-						this.liveReasoning.set(`${tab.sessionId}-r`, r);
+						this.liveReasoning.set(key, r);
+						live.appendChild(r);
+					} else if (live.lastElementChild !== r) {
+						// Reasoning resumed after a tool/text card — start a new
+						// thinking block at the bottom instead of extending the old one.
+						r = el("div", "ocs-live-reasoning");
+						this.liveReasoning.set(key, r);
+						live.appendChild(r);
 					}
-					if (r.parentElement !== live) live.appendChild(r);
 					r.textContent = (r.textContent ?? "") + String(data.delta ?? "");
+					this.scrollLiveToBottom(tab);
 				}
 				break;
 			}
@@ -2646,6 +2685,7 @@ export class OpenCodeChatView extends ItemView {
 							st.output = toolContentText(data.content);
 						}
 						this.paintLiveTool(st);
+						this.scrollLiveToBottom(tab);
 					}
 				}
 				break;
