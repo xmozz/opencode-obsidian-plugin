@@ -227,6 +227,18 @@ class OpenCodeSettingTab extends PluginSettingTab {
 					}),
 			);
 		new Setting(containerEl)
+			.setName("Read-only")
+			.setDesc(
+				"Use opencode's native plan agent: it explores and plans without editing normal project files. Shell commands still ask for approval. Applies to Full access and Vault only; Safe always asks regardless.",
+			)
+			.addToggle((t) =>
+				t.setValue(this.plugin.settings.permissionReadOnly).onChange(async (v) => {
+					this.plugin.settings.permissionReadOnly = v;
+					await this.plugin.saveSettings();
+					this.plugin.chatView()?.applyPermissionMode();
+				}),
+			);
+		new Setting(containerEl)
 			.setName("Font size")
 			.setDesc("Base font size of the chat panel (everything scales with it).")
 			.addSlider((s) =>

@@ -6,6 +6,8 @@ export interface PluginSettings {
 	variant: string;
 	/** Permission approval mode: "full" (approve everything), "vault" (auto-approve vault files only), "safe" (always ask). */
 	permissionMode: "full" | "safe" | "vault";
+	/** When true, file edits are blocked (read-only) in full/vault modes. Safe ignores it. */
+	permissionReadOnly: boolean;
 	maxTabs: number;
 	fontSize: number;
 	latexHint: boolean;
@@ -23,6 +25,7 @@ export const DEFAULT_SETTINGS: PluginSettings = {
 	agent: "",
 	variant: "default",
 	permissionMode: "safe",
+	permissionReadOnly: false,
 	maxTabs: 10,
 	fontSize: 13,
 	latexHint: true,

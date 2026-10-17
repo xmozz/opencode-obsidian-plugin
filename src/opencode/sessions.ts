@@ -60,22 +60,51 @@ export interface PermissionRule {
 	effect: "allow" | "ask" | "deny";
 }
 
+/** Context for the permission ruleset beyond the plain approval mode. */
+export interface PermissionContext {
+	/** Read-only mode is active. */
+	readOnly?: boolean;
+	/**
+	 * The native `plan` agent is used for the session, so it already denies
+	 * edits to normal project files — no explicit `edit` deny is needed (and
+	 * avoiding it keeps the plan agent able to write its own plan files).
+	 */
+	planHandlesEdits?: boolean;
+}
+
 /**
- * Maps a plugin permission mode to an opencode per-session permission ruleset.
- * Rules are evaluated last-match-wins, so the specific `external_directory`
- * guard overrides the `*` wildcard in vault mode.
+ * Maps a plugin permission mode (+ read-only context) to an opencode
+ * per-session permission ruleset. Rules are evaluated last-match-wins.
+ *
+ * Read-only is primarily served by opencode's native `plan` agent; these rules
+ * are the safety net: `shell` is forced to ask because shell can mutate files
+ * (redirects, rm, …) and cannot be classified reliably. Only when no `plan`
+ * agent is available do we additionally deny `edit` outright. Read-only applies
+ * to "full" and "vault"; "safe" already asks for everything.
  */
-export function permissionRulesForMode(mode: PermissionMode): PermissionRule[] {
+export function permissionRulesForMode(
+	mode: PermissionMode,
+	ctx: PermissionContext = {},
+): PermissionRule[] {
+	const guards: PermissionRule[] = [];
+	if (ctx.readOnly) {
+		if (!ctx.planHandlesEdits) {
+			guards.push({ action: "edit", resource: "*", effect: "deny" });
+		}
+		guards.push({ action: "shell", resource: "*", effect: "ask" });
+	}
 	switch (mode) {
-		case "full":
-			return [{ action: "*", resource: "*", effect: "allow" }];
 		case "safe":
 			return [{ action: "*", resource: "*", effect: "ask" }];
+		case "full":
+			return ctx.readOnly ? guards : [{ action: "*", resource: "*", effect: "allow" }];
 		case "vault":
-			return [
-				{ action: "*", resource: "*", effect: "allow" },
-				{ action: "external_directory", resource: "*", effect: "ask" },
-			];
+			return ctx.readOnly
+				? [...guards, { action: "external_directory", resource: "*", effect: "ask" }]
+				: [
+						{ action: "*", resource: "*", effect: "allow" },
+						{ action: "external_directory", resource: "*", effect: "ask" },
+					];
 	}
 }
 

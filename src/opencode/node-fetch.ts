@@ -41,9 +41,20 @@ export function createNodeFetch(): typeof fetch {
 			const transport = url.protocol === "https:" ? https : http;
 			const req = transport.request(url, { method, headers: requestHeaders }, (res) => {
 				if (settled) return;
-				settled = true;
 				signal?.removeEventListener("abort", onAbort);
-				resolve(buildResponse(res));
+				// buildResponse can throw (e.g. a null-body status such as 204
+				// passed to the Response constructor). Reject instead of leaving
+				// the promise pending forever.
+				let response: Response;
+				try {
+					response = buildResponse(res);
+				} catch (error) {
+					res.destroy();
+					fail(error);
+					return;
+				}
+				settled = true;
+				resolve(response);
 			});
 			req.on("error", (error: Error) => fail(error));
 
@@ -121,6 +132,17 @@ function buildResponse(res: http.IncomingMessage): Response {
 			headers.append(key, value);
 		}
 	}
+	const status = res.statusCode ?? 200;
+	// Null-body statuses must not carry a body: the Response constructor throws
+	// for a 204/205/304 with a stream attached.
+	if (status === 204 || status === 205 || status === 304) {
+		res.resume(); // drain so the keep-alive socket is freed
+		return new Response(null, {
+			status,
+			statusText: res.statusMessage ?? "",
+			headers,
+		});
+	}
 	const stream = new ReadableStream<Uint8Array>({
 		start(controller) {
 			res.on("data", (chunk: Buffer | string) => {
@@ -136,7 +158,7 @@ function buildResponse(res: http.IncomingMessage): Response {
 		},
 	});
 	return new Response(stream, {
-		status: res.statusCode ?? 200,
+		status,
 		statusText: res.statusMessage ?? "",
 		headers,
 	});

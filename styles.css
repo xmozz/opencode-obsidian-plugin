@@ -967,6 +967,10 @@ button.ocs-picker-btn:active {
 	color: var(--text-warning, orange);
 }
 
+.ocs-icon-btn.ocs-readonly {
+	color: var(--text-accent);
+}
+
 .ocs-input {
 	background: transparent;
 	border: none;

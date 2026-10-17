@@ -60,6 +60,8 @@ interface TabState {
 	agent: string;
 	/** Per-tab model variant (reasoning effort). */
 	variant: string;
+	/** Last mode+agent key pushed to this session (avoids redundant syncs). */
+	appliedMode?: string;
 }
 
 interface DiscoveredModel {
@@ -501,26 +503,29 @@ export class OpenCodeChatView extends ItemView {
 		this.updateStatusHint();
 	}
 
-	/** Renders the permission-mode button (three-way: full / vault / safe). */
+	/** Renders the permission-mode button (three-way: full / vault / safe + read-only). */
 	renderApproveBtn(): void {
 		const mode = this.plugin.settings.permissionMode;
-		const label = mode === "full" ? "Full" : mode === "vault" ? "Vault" : "Safe";
+		const ro = this.plugin.settings.permissionReadOnly && mode !== "safe";
+		const base = mode === "full" ? "Full" : mode === "vault" ? "Vault" : "Safe";
+		const label = ro ? `${base} · RO` : base;
 		const title =
 			mode === "full"
-				? "Full access: approve every request automatically"
+				? `Full access${ro ? " (read-only: edits blocked, shell asks)" : ""}: approve every request automatically`
 				: mode === "vault"
-					? "Vault only: auto-approve vault files, ask for anything outside"
+					? `Vault only${ro ? " (read-only: edits blocked, shell asks)" : ""}: auto-approve vault files, ask outside`
 					: "Safe: ask before edits and commands";
 		this.restrictBtn.empty();
-		const svg = getIcon(mode === "full" ? "shield-check" : "shield");
+		const svg = getIcon(ro ? "lock" : mode === "full" ? "shield-check" : "shield");
 		if (svg) this.restrictBtn.appendChild(svg);
 		this.restrictBtn.appendChild(el("span", "ocs-picker-label", label));
 		this.restrictBtn.setAttribute("aria-label", title);
 		this.restrictBtn.title = title;
 		this.restrictBtn.classList.toggle("ocs-auto", mode !== "safe");
+		this.restrictBtn.classList.toggle("ocs-readonly", ro);
 	}
 
-	/** Opens the three-way permission-mode menu on the shield button. */
+	/** Opens the permission-mode menu (mode radios + read-only toggle). */
 	private openPermissionModeMenu(e: MouseEvent): void {
 		const menu = new Menu();
 		const modes = [
@@ -528,34 +533,63 @@ export class OpenCodeChatView extends ItemView {
 			{ value: "vault" as const, label: "Vault only" },
 			{ value: "safe" as const, label: "Safe (ask always)" },
 		];
+		const s = this.plugin.settings;
 		for (const m of modes) {
 			menu.addItem((i) =>
 				i
 					.setTitle(m.label)
-					.setChecked(this.plugin.settings.permissionMode === m.value)
+					.setChecked(s.permissionMode === m.value)
 					.onClick(() => {
-						this.plugin.settings.permissionMode = m.value;
+						s.permissionMode = m.value;
 						void this.plugin.saveSettings();
 						this.applyPermissionMode();
 					}),
 			);
 		}
+		menu.addSeparator();
+		menu.addItem((i) =>
+			i
+				.setTitle(
+					s.permissionMode === "safe"
+						? "Read-only (ignored in Safe)"
+						: "Read-only (use plan agent)",
+				)
+				.setChecked(s.permissionReadOnly)
+				.onClick(() => {
+					s.permissionReadOnly = !s.permissionReadOnly;
+					void this.plugin.saveSettings();
+					this.applyPermissionMode();
+				}),
+		);
 		menu.showAtMouseEvent(e);
 	}
 
 	/**
-	 * Applies the current permission mode to every open session and refreshes
-	 * the shield button. Called on mode change and after (re)connecting.
+	 * Applies the current permission mode + read-only state to every open
+	 * session and refreshes the shield and agent buttons. Called on mode change
+	 * and after (re)connecting.
 	 */
 	applyPermissionMode(): void {
 		this.renderApproveBtn();
-		const client = this.plugin.client;
-		if (!client) return;
-		const rules = permissionRulesForMode(this.plugin.settings.permissionMode);
-		for (const t of this.tabs) {
-			if (t.sessionId.startsWith("pending-")) continue;
-			void updateSessionPermissions(client, t.sessionId, rules).catch(() => {});
+		this.refreshPickers();
+		for (const t of this.tabs) void this.applySessionMode(t, true);
+	}
+
+	/** True when the native `plan` agent is available for read-only mode. */
+	private planAgentAvailable(): boolean {
+		return this.agents.some((a) => a.id === "plan");
+	}
+
+	/**
+	 * Session agent actually used: the native `plan` agent while read-only is
+	 * on (it explores/plans without editing normal project files), otherwise
+	 * the tab's own selection.
+	 */
+	private effectiveAgent(): string {
+		if (this.plugin.settings.permissionReadOnly && this.planAgentAvailable()) {
+			return "plan";
 		}
+		return this.activeAgent();
 	}
 
 	// ---------- tabs (UI-only; sessions live in opencode, not in files) ----------
@@ -660,6 +694,12 @@ export class OpenCodeChatView extends ItemView {
 		const modelChoice = model ?? this.activeTab()?.model ?? this.plugin.settings.model;
 		const agentChoice = agent ?? this.activeTab()?.agent ?? this.plugin.settings.agent;
 		const variantChoice = variant ?? this.activeTab()?.variant ?? this.plugin.settings.variant;
+		// Read-only runs the native plan agent; the tab still remembers the
+		// user's own agent so it comes back when read-only is turned off.
+		const readOnly = this.plugin.settings.permissionReadOnly;
+		const plan = readOnly && this.planAgentAvailable();
+		const sessionAgent = plan ? "plan" : agentChoice;
+		let createdSession = false;
 		if (!sid) {
 			if (!client) {
 				new Notice("OpenCode not connected yet");
@@ -670,12 +710,16 @@ export class OpenCodeChatView extends ItemView {
 					client,
 					vaultDir,
 					modelChoice ? parseModelRef(modelChoice) ?? undefined : undefined,
-					agentChoice || undefined,
+					sessionAgent || undefined,
 					undefined,
-					permissionRulesForMode(this.plugin.settings.permissionMode),
+					permissionRulesForMode(this.plugin.settings.permissionMode, {
+						readOnly,
+						planHandlesEdits: plan,
+					}),
 				);
 				sid = created.id;
 				t = created.title;
+				createdSession = true;
 			} catch (e) {
 				new Notice(`Could not create session: ${errMsg(e)}`);
 				return;
@@ -712,6 +756,8 @@ export class OpenCodeChatView extends ItemView {
 		};
 		this.tabs.push(tab);
 		this.activeTabId = tab.tabId;
+		// A freshly created session already carries the mode/agent we passed in.
+		if (createdSession) tab.appliedMode = this.modeKey(tab);
 		this.autoAttachActiveFile(tab);
 		this.renderTabs();
 		this.renderContent();
@@ -723,15 +769,47 @@ export class OpenCodeChatView extends ItemView {
 		if (isExistingSession && sid) this.applyPermissionsToTab(tab);
 	}
 
-	/** Syncs a single session's permission rules to the current mode. */
-	private applyPermissionsToTab(tab: TabState): void {
+	/**
+	 * Pushes the current permission ruleset and effective agent to one session.
+	 * Read-only switches the session to the native `plan` agent; turning it off
+	 * restores the tab's own agent.
+	 *
+	 * Requests are sent sequentially (two concurrent mutations on the same
+	 * session can deadlock the server) and the whole sync is bounded by a
+	 * timeout so a stuck request can never block sending a prompt. The applied
+	 * state is remembered so unchanged tabs are skipped entirely.
+	 */
+	private async applySessionMode(tab: TabState, force = false): Promise<void> {
 		const client = this.plugin.client;
 		if (!client || tab.sessionId.startsWith("pending-")) return;
-		void updateSessionPermissions(
-			client,
-			tab.sessionId,
-			permissionRulesForMode(this.plugin.settings.permissionMode),
-		).catch(() => {});
+		const key = this.modeKey(tab);
+		if (!force && tab.appliedMode === key) return;
+		const readOnly = this.plugin.settings.permissionReadOnly;
+		const plan = readOnly && this.planAgentAvailable();
+		const rules = permissionRulesForMode(this.plugin.settings.permissionMode, {
+			readOnly,
+			planHandlesEdits: plan,
+		});
+		const agent = plan ? "plan" : tab.agent;
+		const sync = (async () => {
+			await updateSessionPermissions(client, tab.sessionId, rules).catch(() => {});
+			if (agent) await switchAgent(client, tab.sessionId, agent).catch(() => {});
+		})();
+		const timeout = new Promise<void>((r) => setTimeout(r, 6000));
+		await Promise.race([sync, timeout]);
+		tab.appliedMode = key;
+	}
+
+	/** Identity of the mode + agent a session should currently carry. */
+	private modeKey(tab: TabState): string {
+		const readOnly = this.plugin.settings.permissionReadOnly;
+		const plan = readOnly && this.planAgentAvailable();
+		return `${this.plugin.settings.permissionMode}|${readOnly ? "ro" : "rw"}|${plan ? "plan" : tab.agent}`;
+	}
+
+	/** Syncs a single session's mode + permission rules to the current state. */
+	private applyPermissionsToTab(tab: TabState): void {
+		void this.applySessionMode(tab);
 	}
 
 	private closeTab(tabId: string): void {
@@ -1395,7 +1473,7 @@ export class OpenCodeChatView extends ItemView {
 			menu.addItem((i) =>
 				i
 					.setTitle(a.name || a.id)
-					.setChecked(a.id === this.activeAgent())
+					.setChecked(a.id === this.effectiveAgent())
 					.onClick(() => void this.onAgentChanged(a.id)),
 			);
 		}
@@ -1450,13 +1528,20 @@ export class OpenCodeChatView extends ItemView {
 		if (value !== undefined) {
 			if (tab) tab.agent = value;
 			this.plugin.settings.agent = value;
+			// Keep read-only in sync with the native plan agent: picking plan
+			// turns read-only on, any other agent turns it off.
+			const ro = value === "plan" && this.planAgentAvailable();
+			if (this.plugin.settings.permissionReadOnly !== ro) {
+				this.plugin.settings.permissionReadOnly = ro;
+				this.renderApproveBtn();
+			}
 		}
 		void this.plugin.saveSettings();
 		this.persistTabs();
 		this.renderAgentBtn();
 		if (tab && client && tab.sessionId && !tab.sessionId.startsWith("pending-")) {
 			try {
-				await switchAgent(client, tab.sessionId, this.activeAgent());
+				await this.applySessionMode(tab);
 			} catch (e) {
 				new Notice(`Agent switch failed: ${errMsg(e)}`);
 			}
@@ -1630,6 +1715,9 @@ export class OpenCodeChatView extends ItemView {
 		}
 		const files = tab.images.map((i) => ({ uri: i.dataUrl }));
 		try {
+			// Make sure this session carries the current permission ruleset before
+			// the turn starts (a mode/read-only change may have been missed).
+			await this.applySessionMode(tab);
 			await sendPrompt(client, tab.sessionId, text, files);
 			tab.images = [];
 			this.renderChips();
@@ -1940,11 +2028,15 @@ export class OpenCodeChatView extends ItemView {
 			this.plugin.settings.agent = preferred.id;
 			void this.plugin.saveSettings();
 		}
-		const label = this.agentLabel(this.activeAgent());
+		const ro = this.plugin.settings.permissionReadOnly && this.planAgentAvailable();
+		const effective = this.effectiveAgent();
+		const label = this.agentLabel(effective) + (ro ? " · RO" : "");
 		this.agentBtn.empty();
 		this.agentBtn.appendChild(el("span", "ocs-picker-label", label));
 		this.agentBtn.appendChild(el("span", "ocs-picker-chev", "▾"));
-		this.agentBtn.title = `Agent: ${this.activeAgent() || "none"} (click to change)`;
+		this.agentBtn.title = ro
+			? "Read-only: the native plan agent is used (pick another agent to leave read-only)"
+			: `Agent: ${effective || "none"} (click to change)`;
 	}
 
 	// ---------- history: THE shared session list (/session) ----------
