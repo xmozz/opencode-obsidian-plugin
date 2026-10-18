@@ -204,6 +204,7 @@
 	min-height: 0;
 	overflow: hidden;
 	display: flex;
+	position: relative;
 	background: var(--background-primary);
 }
 
@@ -223,6 +224,39 @@
 	color: var(--text-muted);
 	text-align: center;
 	padding: 24px 12px;
+}
+
+/* jump-to-newest: floats over the list while the user reads above the tail */
+.ocs-jump-btn {
+	position: absolute;
+	bottom: 14px;
+	left: 50%;
+	transform: translateX(-50%);
+	z-index: 5;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	padding: 6px 11px;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 999px;
+	background: var(--background-secondary);
+	color: var(--text-normal);
+	box-shadow: 0 2px 8px rgba(0, 0, 0, 0.28);
+	cursor: pointer;
+}
+
+.ocs-jump-btn:hover {
+	background: var(--background-modifier-hover);
+	color: var(--text-accent);
+}
+
+.ocs-jump-btn svg {
+	width: 15px;
+	height: 15px;
+}
+
+.ocs-jump-btn.ocs-hidden {
+	display: none;
 }
 
 .ocs-msg {

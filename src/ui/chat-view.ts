@@ -209,6 +209,12 @@ export class OpenCodeChatView extends ItemView {
 	private pendingForms = new Map<string, Array<Record<string, unknown>>>();
 	private permissionCards = new Map<string, Map<string, HTMLElement>>();
 	private formCards = new Map<string, Map<string, HTMLElement>>();
+	/** Floating "jump to newest" button, visible whenever the list is scrolled up. */
+	private jumpBtn!: HTMLButtonElement;
+	/** Follow-the-tail toggle: paused when the user scrolls away from the bottom. */
+	private autoScroll = true;
+	/** Active tab of the last render; a tab switch re-arms auto-scroll. */
+	private lastRenderedTabId: string | null = null;
 
 	constructor(leaf: WorkspaceLeaf, plugin: OpenCodePlugin) {
 		super(leaf);
@@ -309,6 +315,12 @@ export class OpenCodeChatView extends ItemView {
 		this.content = el("div", "ocs-tab-content-container");
 		this.content.addEventListener("click", (e) => this.onLinkClick(e as MouseEvent));
 		shell.appendChild(this.content);
+
+		// jump-to-newest: floats over the list while the user reads above the tail
+		this.jumpBtn = el("button", "ocs-jump-btn ocs-hidden");
+		setIconOrText(this.jumpBtn, "arrow-down", "↓", "Jump to newest messages");
+		this.jumpBtn.onclick = () => this.jumpToBottom();
+		this.content.appendChild(this.jumpBtn);
 
 		// history panel (popover)
 		this.historyPanel = el("aside", "ocs-history-menu ocs-hidden");
@@ -740,7 +752,9 @@ export class OpenCodeChatView extends ItemView {
 			streaming: false,
 			attention: false,
 			messages: [],
-			loaded: false,
+			// A just-created session has no history, so it is loaded already
+			// (avoids a reload racing an immediately-sent first message).
+			loaded: createdSession,
 			usageCost: 0,
 			usageInput: 0,
 			usageOutput: 0,
@@ -1158,20 +1172,32 @@ export class OpenCodeChatView extends ItemView {
 
 	private renderContent(): void {
 		this.content.empty();
+		// Switching tabs re-arms follow-the-tail: each tab opens at its tail.
+		if (this.activeTabId !== this.lastRenderedTabId) {
+			this.autoScroll = true;
+			this.lastRenderedTabId = this.activeTabId;
+		}
 		this.renderChips();
 		this.renderQueueBar();
 		this.refreshPickers();
 		const tab = this.activeTab();
 		if (!tab) {
-			this.content.appendChild(el("div", "ocs-empty", "Open a session tab to start."));
+			this.content.appendChild(
+				el("div", "ocs-empty", "No session open — just type below to start a new one."),
+			);
+			this.mountJumpBtn();
+			this.updateJumpBtn();
 			this.renderSendBtn();
 			return;
 		}
 		this.renderSendBtn();
 		const list = el("div", "ocs-message-list");
+		list.addEventListener("scroll", this.onListScroll, { passive: true });
 		this.content.appendChild(list);
+		this.mountJumpBtn();
 		if (!tab.loaded) {
 			list.appendChild(el("div", "ocs-wait", "Loading native session history…"));
+			this.updateJumpBtn();
 			return;
 		}
 		if (tab.messages.length === 0 && !this.queuedFor(tab.tabId).length) {
@@ -1195,7 +1221,7 @@ export class OpenCodeChatView extends ItemView {
 		const live = this.liveAssistant.get(tab.sessionId);
 		if (live && live.parentElement !== list) list.appendChild(live);
 		this.renderPendingCards(tab);
-		list.scrollTop = list.scrollHeight;
+		this.scrollListToBottom(list);
 		this.updateUsageBadge();
 	}
 
@@ -1549,10 +1575,19 @@ export class OpenCodeChatView extends ItemView {
 	}
 
 	private async sendCurrent(): Promise<void> {
-		const tab = this.activeTab();
-		if (!tab) return;
+		let tab = this.activeTab();
 		const raw = this.composerText.value.trim();
 		if (!raw) return;
+
+		// No active session: start one on the fly so a plain message has a home.
+		// Slash commands are left alone — they either need no session (/new,
+		// /session) or a specific tab to act on.
+		if (!tab && !raw.startsWith("/")) {
+			tab = await this.ensureSessionForSend();
+			if (!tab) return; // could not create (still connecting) — keep the draft
+		}
+		if (!tab) return;
+
 		this.composerText.value = "";
 		this.closeSlashMenu();
 
@@ -1567,6 +1602,21 @@ export class OpenCodeChatView extends ItemView {
 			return;
 		}
 		void this.dispatchText(tab, raw);
+	}
+
+	/**
+	 * Creates a fresh session tab on demand (used when the user sends a message
+	 * while no session is open). Returns the new tab, or undefined when the
+	 * client is not ready — in which case the caller keeps the draft.
+	 */
+	private async ensureSessionForSend(): Promise<TabState | undefined> {
+		const client = this.plugin.client;
+		if (!client || this.plugin.isConnecting()) {
+			new Notice("opencode is still starting — your message is kept, try again in a moment.");
+			return undefined;
+		}
+		await this.newTab();
+		return this.activeTab();
 	}
 
 	private enqueue(tab: TabState, raw: string): void {
@@ -2334,9 +2384,55 @@ export class OpenCodeChatView extends ItemView {
 	/** Scrolls the active message list to the bottom (stick-to-bottom while streaming). */
 	private scrollLiveToBottom(tab: TabState): void {
 		if (tab.tabId !== this.activeTabId) return;
-		const list = this.messageListEl();
-		if (list) list.scrollTop = list.scrollHeight;
+		this.scrollListToBottom();
 	}
+
+	/** Re-appends the floating jump button after a content re-render. */
+	private mountJumpBtn(): void {
+		if (this.jumpBtn && this.jumpBtn.parentElement !== this.content) {
+			this.content.appendChild(this.jumpBtn);
+		}
+	}
+
+	/** True when the scroll position is (within a small tolerance) at the tail. */
+	private isListAtBottom(list: HTMLElement | null): boolean {
+		if (!list) return true;
+		return list.scrollHeight - list.scrollTop - list.clientHeight <= 24;
+	}
+
+	/** Shows the jump button only while the list is scrolled away from the tail. */
+	private updateJumpBtn(): void {
+		if (!this.jumpBtn) return;
+		this.jumpBtn.classList.toggle("ocs-hidden", this.isListAtBottom(this.messageListEl()));
+	}
+
+	/**
+	 * Scrolls the message list to its tail, unless the user is reading above
+	 * the live edge (pass force to override). Keeps the jump button in sync.
+	 */
+	private scrollListToBottom(
+		list: HTMLElement | null = this.messageListEl(),
+		force = false,
+	): void {
+		if (!list || (!this.autoScroll && !force)) return;
+		list.scrollTop = list.scrollHeight;
+		this.updateJumpBtn();
+	}
+
+	/** Re-arms follow-the-tail and jumps to the newest message. */
+	private jumpToBottom(): void {
+		this.autoScroll = true;
+		this.scrollListToBottom(this.messageListEl(), true);
+		this.updateJumpBtn();
+	}
+
+	/** Leaves the tail -> pause auto-scroll; returns to the tail -> resume. */
+	private onListScroll = (): void => {
+		const list = this.messageListEl();
+		if (!list) return;
+		this.autoScroll = this.isListAtBottom(list);
+		this.updateJumpBtn();
+	};
 
 	private ensureLiveAssistant(tab: TabState): HTMLElement {
 		let live = this.liveAssistant.get(tab.sessionId);
@@ -2350,7 +2446,7 @@ export class OpenCodeChatView extends ItemView {
 			const list = this.messageListEl();
 			if (list && live.parentElement !== list) {
 				list.appendChild(live);
-				list.scrollTop = list.scrollHeight;
+				this.scrollListToBottom(list);
 			}
 		} else {
 			tab.attention = true;
@@ -2405,7 +2501,7 @@ export class OpenCodeChatView extends ItemView {
 			map.set(toolId, st);
 			live.appendChild(node);
 			const list = this.messageListEl();
-			if (list && tab.tabId === this.activeTabId) list.scrollTop = list.scrollHeight;
+			if (list && tab.tabId === this.activeTabId) this.scrollListToBottom(list);
 		}
 		if (patch.name !== undefined) st.name = patch.name;
 		if (patch.inputText !== undefined) st.inputText = patch.inputText;
@@ -2933,7 +3029,7 @@ export class OpenCodeChatView extends ItemView {
 		if (existing) {
 			if (existing.parentElement !== list) {
 				list.appendChild(existing);
-				list.scrollTop = list.scrollHeight;
+				this.scrollListToBottom(list);
 			}
 			return;
 		}
@@ -2967,7 +3063,7 @@ export class OpenCodeChatView extends ItemView {
 		row.appendChild(reject);
 		card.appendChild(row);
 		list.appendChild(card);
-		list.scrollTop = list.scrollHeight;
+		this.scrollListToBottom(list);
 	}
 
 	private renderFormCard(tab: TabState, form: Record<string, unknown>): void {
@@ -2984,7 +3080,7 @@ export class OpenCodeChatView extends ItemView {
 		if (existing) {
 			if (existing.parentElement !== list) {
 				list.appendChild(existing);
-				list.scrollTop = list.scrollHeight;
+				this.scrollListToBottom(list);
 			}
 			return;
 		}
@@ -3155,7 +3251,7 @@ export class OpenCodeChatView extends ItemView {
 		row.appendChild(submit);
 		card.appendChild(row);
 		list.appendChild(card);
-		list.scrollTop = list.scrollHeight;
+		this.scrollListToBottom(list);
 	}
 
 	private setStatus(text: string): void {
