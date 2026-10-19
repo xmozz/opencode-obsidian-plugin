@@ -31,7 +31,7 @@ The plugin talks to the **same shared opencode background service as the CLI**, 
 ## Features
 
 - **Tabs**: numbered, with working indicator (spinner + pulsing border) while the agent writes; hover-× and middle-click to close; right-click menu (rename/fork/reload/delete); shrink-to-fit instead of scrolling.
-- **Composer box**: file chips on top (focused note auto-attached, `+ Add` vault picker, 📎 system explorer for any file, drag & drop, paste images via Ctrl+V), full Obsidian Markdown rendering (callouts, tables, tasks, highlights, LaTeX), slash-command menu (`/`), model/agent/effort pickers, Safe/Auto-approve toggle, send/stop.
+- **Composer box**: file chips on top (focused note or PDF auto-attached, `+ Add` vault picker for notes and PDFs, 📎 system explorer for any file, drag & drop, paste images via Ctrl+V), full Obsidian Markdown rendering (callouts, tables, tasks, highlights, LaTeX), slash-command menu (`/`), model/agent/effort pickers, Safe/Auto-approve toggle, send/stop.
 - **Tool transparency**: shell/edit/read calls stream live; file edits render as GitHub-style diffs with `+N −M` stats (new files all-green).
 - **Turn metadata**: timestamp plus working duration (`· 1m 24s`) under every answer; per-message copy button; tokens · cost · context-window % at the top of the composer.
 - **Permissions & questions**: approval cards and structured question cards inline; Safe mode asks, Auto-approve accepts.

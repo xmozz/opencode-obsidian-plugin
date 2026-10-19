@@ -22,12 +22,13 @@ import {
 	readExternalTextFile,
 	appendExternalFile,
 	isAbsolutePath,
+	isPdfPath,
 	parseUnifiedDiff,
 	countDiff,
 	type VaultSession,
 	type ChatMessage,
 } from "../opencode/sessions";
-import { FileAttachModal } from "./attach-modal";
+import { FileAttachModal, isAttachablePath } from "./attach-modal";
 import { ModelPickerModal } from "./model-modal";
 import { ConfirmModal } from "./confirm-modal";
 
@@ -943,11 +944,15 @@ export class OpenCodeChatView extends ItemView {
 
 	// ---------- file context (Grimoire-style chips) ----------
 
-	/** Currently focused markdown file, vault-relative, if auto-attach applies. */
+	/**
+	 * Currently focused file (note or PDF), vault-relative, when auto-attach
+	 * applies. PDFs are attached by path — opencode's read tool handles them
+	 * natively (extracts text and renders pages).
+	 */
 	private focusedNotePath(): string | null {
 		if (!this.plugin.settings.autoAttachActiveFile) return null;
 		const file = this.app.workspace.getActiveFile();
-		if (!file || file.extension !== "md") return null;
+		if (!file || !isAttachablePath(file.path)) return null;
 		return file.path;
 	}
 
@@ -1123,7 +1128,7 @@ export class OpenCodeChatView extends ItemView {
 			this.chipsRow.appendChild(thumb);
 		}
 		const add = el("button", "ocs-chip-add", "+ Add vault item");
-		add.title = "Attach a vault file as context";
+		add.title = "Attach a vault note or PDF as context";
 		add.onclick = () => this.openAttachPicker();
 		this.chipsRow.appendChild(add);
 		// Usage text lives top-right inside the composer box (plain text).
@@ -1135,6 +1140,10 @@ export class OpenCodeChatView extends ItemView {
 		const chip = el("span", `ocs-chip${isActiveNote ? " ocs-chip-note" : ""}`);
 		chip.title = path;
 		const base = path.split("/").pop() ?? path;
+		if (isPdfPath(path)) {
+			chip.classList.add("ocs-chip-pdf");
+			chip.appendChild(el("span", "ocs-chip-tag", "PDF"));
+		}
 		chip.appendChild(el("span", "ocs-chip-name", base));
 		const x = el("button", "ocs-chip-x", "×");
 		x.title = "Remove";
@@ -1756,7 +1765,12 @@ export class OpenCodeChatView extends ItemView {
 		// Vault files travel as paths; external files are inlined so the
 		// agent can always open them (paths alone often fail to resolve).
 		let text = raw;
-		if (tab.activeNote) text = appendCurrentNote(text, tab.activeNote);
+		if (tab.activeNote) {
+			// A focused PDF is context to read, not an edit target.
+			text = isPdfPath(tab.activeNote)
+				? appendContextFiles(text, [tab.activeNote])
+				: appendCurrentNote(text, tab.activeNote);
+		}
 		const extra = tab.contextFiles.filter((f) => f !== tab.activeNote);
 		const vaultRefs = extra.filter((f) => !isAbsolutePath(f));
 		if (vaultRefs.length > 0) text = appendContextFiles(text, vaultRefs);

@@ -456,17 +456,28 @@ function mapStatus(status: unknown): string {
 const CURRENT_NOTE_TARGET_HINT =
 	"Default target: If the user asks to edit, rewrite, update, or apply instructions without naming another target file, use this note as the target file.";
 
+/** PDFs are never inlined as text — the agent reads them with its read tool. */
+const PDF_CONTEXT_HINT =
+	"PDF files are referenced by path: read them with the read tool (it extracts the text and can render pages). Never assume their content without reading them.";
+
+/** True for PDF paths (vault-relative or absolute). */
+export function isPdfPath(p: string): boolean {
+	return /\.pdf$/i.test(p);
+}
+
 export function appendCurrentNote(prompt: string, notePath: string): string {
 	return `${prompt}\n\n${["<current_note>", notePath, CURRENT_NOTE_TARGET_HINT, "</current_note>"].join("\n")}`;
 }
 
 export function appendContextFiles(prompt: string, files: string[]): string {
 	const fileLines = files.map((file) => `- ${file}`).join("\n");
+	const hasPdf = files.some((file) => isPdfPath(file));
 	return `${prompt}\n\n${[
 		"<context_files>",
 		"The user selected these files as active context.",
 		"Inspect the relevant selected files before answering broad or deictic requests.",
 		"Do not ignore these files just because the user did not name them explicitly in the message.",
+		...(hasPdf ? [PDF_CONTEXT_HINT] : []),
 		"",
 		fileLines,
 		"</context_files>",
@@ -512,6 +523,8 @@ export function readExternalTextFile(absPath: string): ExternalFileContent {
 		const fs = require("node:fs") as typeof import("node:fs");
 		const stat = fs.statSync(absPath);
 		if (!stat.isFile()) return { path: absPath, error: "not a file" };
+		// PDFs are never inlined as text — the agent reads them by path.
+		if (isPdfPath(absPath)) return { path: absPath, binary: true };
 		if (stat.size > 4 * 1024 * 1024) return { path: absPath, error: "file too large" };
 		const buffer = fs.readFileSync(absPath);
 		const probe = buffer.subarray(0, Math.min(buffer.length, 8192));
@@ -534,9 +547,7 @@ export function appendExternalFile(prompt: string, file: ExternalFileContent): s
 		const note = file.truncated ? "\n[... truncated, ask for specific parts if needed]" : "";
 		return `${prompt}\n\n<context_file path="${file.path}">\n${file.text}${note}\n</context_file>`;
 	 }
-	if (file.binary) {
-		return appendContextFiles(prompt, [`${file.path} (binary file, read it with an appropriate tool)`]);
-	}
+	// Binaries (PDFs included) travel as a path: the agent's read tool handles them.
 	return appendContextFiles(prompt, [file.path]);
 }
 

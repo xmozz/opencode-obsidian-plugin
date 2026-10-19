@@ -282,7 +282,7 @@ class OpenCodeSettingTab extends PluginSettingTab {
 			);
 		new Setting(containerEl)
 			.setName("Auto-attach focused file")
-			.setDesc("Automatically attach the focused markdown file as context when the chat starts, like Grimoire.")
+			.setDesc("Automatically attach the focused note or PDF as context when the chat starts, like Grimoire.")
 			.addToggle((t) =>
 				t.setValue(this.plugin.settings.autoAttachActiveFile).onChange(async (v) => {
 					this.plugin.settings.autoAttachActiveFile = v;

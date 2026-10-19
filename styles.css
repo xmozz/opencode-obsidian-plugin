@@ -809,6 +809,24 @@ button.ocs-copy-btn:active {
 	border-color: var(--text-accent);
 }
 
+/* PDF chips get a small tag so the file type is obvious at a glance. */
+.ocs-chip-tag {
+	flex-shrink: 0;
+	padding: 0 3px;
+	border-radius: 3px;
+	background: var(--background-modifier-border);
+	color: var(--text-muted);
+	font-size: calc(var(--ocs-fs, 13px) - 5px);
+	font-weight: 600;
+	letter-spacing: 0.03em;
+}
+
+.ocs-chip-pdf .ocs-chip-tag {
+	background: var(--text-error);
+	color: var(--text-on-accent);
+	opacity: 0.85;
+}
+
 .ocs-chip-name {
 	overflow: hidden;
 	text-overflow: ellipsis;
