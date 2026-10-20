@@ -375,6 +375,35 @@ button.ocs-copy-btn:active {
 	margin: 8px 0 4px;
 }
 
+/* Markdown tables: the rendered body is not a .markdown-rendered container,
+   so themes don't apply their table borders here. Draw them explicitly. */
+.ocs-msg-body table {
+	border-collapse: collapse;
+	border-spacing: 0;
+	display: block;
+	width: max-content;
+	max-width: 100%;
+	overflow-x: auto;
+	margin: 8px 0;
+}
+
+.ocs-msg-body th,
+.ocs-msg-body td {
+	border: 1px solid var(--table-border-color, var(--background-modifier-border));
+	padding: 4px 9px;
+	text-align: left;
+	vertical-align: top;
+}
+
+.ocs-msg-body thead th {
+	background: var(--table-header-background, var(--background-secondary));
+	font-weight: 600;
+}
+
+.ocs-msg-body tbody tr:nth-child(even) td {
+	background: var(--table-row-background, transparent);
+}
+
 .ocs-error-block {
 	color: var(--text-error, #f85149);
 	font-family: var(--font-monospace);

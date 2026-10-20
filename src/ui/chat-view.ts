@@ -1310,6 +1310,10 @@ export class OpenCodeChatView extends ItemView {
 	private renderBodyText(container: HTMLElement, text: string): void {
 		const converted = convertLatexCodeToMath(text);
 		const div = document.createElement("div");
+		// Obsidian's default Markdown element styles (blockquotes, tables,
+		// lists, headings, …) are scoped to .markdown-rendered, so without
+		// this class quotes lose their bar and tables their borders.
+		div.classList.add("markdown-rendered");
 		container.appendChild(div);
 		MarkdownRenderer.render(this.app, converted, div, "", this).catch(() => {
 			div.innerHTML = renderRich(text);
