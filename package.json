@@ -1,6 +1,6 @@
 {
 	"name": "opencode-obsidian",
-	"version": "0.4.2",
+	"version": "0.4.3",
 	"description": "Obsidian plugin: Grimoire-style OpenCode chat with native shared sessions.",
 	"main": "main.js",
 	"type": "commonjs",

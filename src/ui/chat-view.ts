@@ -1267,17 +1267,13 @@ export class OpenCodeChatView extends ItemView {
 		}
 		const bubble = el("div", "ocs-bubble");
 		if (m.reasoning.length > 0) {
-			const det = document.createElement("details");
-			det.className = "ocs-thinking";
-			const sum = document.createElement("summary");
-			sum.textContent = `Thinking (${m.reasoning.length})`;
-			det.appendChild(sum);
+			const thinking = this.createThinkingBlock();
 			for (const r of m.reasoning) {
 				const d = el("div", "ocs-thinking-text");
 				d.innerHTML = renderRich(r);
-				det.appendChild(d);
+				thinking.body.appendChild(d);
 			}
-			bubble.appendChild(det);
+			bubble.appendChild(thinking.root);
 		}
 		for (const t of m.tools) {
 			bubble.appendChild(this.renderTool(t));
@@ -2452,6 +2448,39 @@ export class OpenCodeChatView extends ItemView {
 		this.updateJumpBtn();
 	};
 
+	/**
+	 * Collapsible "Thinking" block: an always-visible header (collapsed by
+	 * default) that expands to reveal the reasoning. Used for both the finished
+	 * message and the live stream, so the label is visible while the model is
+	 * still thinking without pushing the actual answer out of view.
+	 */
+	private createThinkingBlock(): { root: HTMLElement; body: HTMLElement } {
+		const root = el("div", "ocs-thinking");
+		const head = el("button", "ocs-thinking-head");
+		head.type = "button";
+		head.setAttribute("aria-expanded", "false");
+		const caret = el("span", "ocs-thinking-caret", "▸");
+		const label = el("span", "ocs-thinking-label", "Thinking");
+		head.appendChild(caret);
+		head.appendChild(label);
+		const body = el("div", "ocs-thinking-body ocs-collapsed");
+		root.appendChild(head);
+		root.appendChild(body);
+		head.addEventListener("click", (e) => {
+			e.stopPropagation();
+			const collapsed = body.classList.toggle("ocs-collapsed");
+			caret.textContent = collapsed ? "▸" : "▾";
+			head.setAttribute("aria-expanded", String(!collapsed));
+		});
+		return { root, body };
+	}
+
+	private createLiveReasoning(): HTMLElement {
+		const thinking = this.createThinkingBlock();
+		thinking.root.classList.add("ocs-live-reasoning");
+		return thinking.root;
+	}
+
 	private ensureLiveAssistant(tab: TabState): HTMLElement {
 		let live = this.liveAssistant.get(tab.sessionId);
 		if (!live) {
@@ -2811,17 +2840,20 @@ export class OpenCodeChatView extends ItemView {
 					const key = `${tab.sessionId}-r`;
 					let r = this.liveReasoning.get(key);
 					if (!r || r.parentElement !== live) {
-						r = el("div", "ocs-live-reasoning");
+						r = this.createLiveReasoning();
 						this.liveReasoning.set(key, r);
 						live.appendChild(r);
 					} else if (live.lastElementChild !== r) {
 						// Reasoning resumed after a tool/text card — start a new
 						// thinking block at the bottom instead of extending the old one.
-						r = el("div", "ocs-live-reasoning");
+						r = this.createLiveReasoning();
 						this.liveReasoning.set(key, r);
 						live.appendChild(r);
 					}
-					r.textContent = (r.textContent ?? "") + String(data.delta ?? "");
+					const body = r.querySelector(".ocs-thinking-body");
+					if (body) {
+						body.textContent = (body.textContent ?? "") + String(data.delta ?? "");
+					}
 					this.scrollLiveToBottom(tab);
 				}
 				break;
