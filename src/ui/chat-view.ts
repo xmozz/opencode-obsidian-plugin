@@ -2618,13 +2618,9 @@ export class OpenCodeChatView extends ItemView {
 		let ready = false;
 		root.addEventListener("toggle", () => {
 			if (!ready) return;
+			// Only this block follows the user's click; other turns keep
+			// their own expand state instead of all syncing together.
 			this.workingOpen.set(sessionId, root.open);
-			// Keep every finished turn of this session in the same state —
-			// both live and re-rendered blocks follow the session preference.
-			const sel = `.ocs-working[data-session="${cssEsc(sessionId)}"]`;
-			this.content.querySelectorAll<HTMLDetailsElement>(sel).forEach((d) => {
-				if (d.open !== root.open) d.open = root.open;
-			});
 		});
 		window.setTimeout(() => {
 			ready = true;
