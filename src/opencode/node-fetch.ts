@@ -47,7 +47,7 @@ export function createNodeFetch(): typeof fetch {
 				// the promise pending forever.
 				let response: Response;
 				try {
-					response = buildResponse(res);
+					response = buildResponse(res, signal);
 				} catch (error) {
 					res.destroy();
 					fail(error);
@@ -122,7 +122,7 @@ async function toBodyBytes(body: BodyInit | null | undefined): Promise<Uint8Arra
 	throw new Error(`Unsupported request body type: ${typeof body}`);
 }
 
-function buildResponse(res: http.IncomingMessage): Response {
+function buildResponse(res: http.IncomingMessage, signal?: AbortSignal): Response {
 	const headers = new Headers();
 	for (const [key, value] of Object.entries(res.headers)) {
 		if (value === undefined) continue;
@@ -143,17 +143,44 @@ function buildResponse(res: http.IncomingMessage): Response {
 			headers,
 		});
 	}
+	let controllerRef: ReadableStreamDefaultController<Uint8Array> | undefined;
+	let streamSettled = false;
+	const cleanup = (): void => signal?.removeEventListener("abort", onAbort);
+	const settle = (error?: Error): void => {
+		if (streamSettled) return;
+		streamSettled = true;
+		cleanup();
+		try {
+			if (error) controllerRef?.error(error);
+			else controllerRef?.close();
+		} catch {
+			/* The consumer may already have canceled the stream. */
+		}
+	};
+	const onAbort = (): void => {
+		const reason = signal?.reason ?? new Error("Request aborted");
+		res.destroy(reason instanceof Error ? reason : new Error(String(reason)));
+		settle(reason instanceof Error ? reason : new Error(String(reason)));
+	};
 	const stream = new ReadableStream<Uint8Array>({
 		start(controller) {
+			controllerRef = controller;
 			res.on("data", (chunk: Buffer | string) => {
+				if (streamSettled) return;
 				// Copy: Node reuses Buffer pool memory, views would corrupt.
 				const buffer = typeof chunk === "string" ? Buffer.from(chunk) : chunk;
 				controller.enqueue(new Uint8Array(buffer));
 			});
-			res.on("end", () => controller.close());
-			res.on("error", (error: Error) => controller.error(error));
+			res.on("end", () => settle());
+			res.on("error", (error: Error) => settle(error));
+			if (signal) {
+				if (signal.aborted) onAbort();
+				else signal.addEventListener("abort", onAbort, { once: true });
+			}
 		},
 		cancel(reason?: unknown) {
+			streamSettled = true;
+			cleanup();
 			res.destroy(reason instanceof Error ? reason : undefined);
 		},
 	});

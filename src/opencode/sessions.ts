@@ -1,4 +1,5 @@
 import type { OpenCodeClient } from "@opencode/client";
+import * as fs from "node:fs/promises";
 
 export interface VaultSession {
 	id: string;
@@ -517,16 +518,14 @@ const EXTERNAL_INLINE_LIMIT = 65536;
  * Vault files are passed by path (the agent reads them natively); external
  * files are inlined because the agent may not resolve them otherwise.
  */
-export function readExternalTextFile(absPath: string): ExternalFileContent {
+export async function readExternalTextFile(absPath: string): Promise<ExternalFileContent> {
 	try {
-		// eslint-disable-next-line @typescript-eslint/no-require-imports
-		const fs = require("node:fs") as typeof import("node:fs");
-		const stat = fs.statSync(absPath);
+		const stat = await fs.stat(absPath);
 		if (!stat.isFile()) return { path: absPath, error: "not a file" };
 		// PDFs are never inlined as text — the agent reads them by path.
 		if (isPdfPath(absPath)) return { path: absPath, binary: true };
 		if (stat.size > 4 * 1024 * 1024) return { path: absPath, error: "file too large" };
-		const buffer = fs.readFileSync(absPath);
+		const buffer = await fs.readFile(absPath);
 		const probe = buffer.subarray(0, Math.min(buffer.length, 8192));
 		if (probe.includes(0)) return { path: absPath, binary: true };
 		let text = buffer.toString("utf8");
@@ -545,8 +544,15 @@ export function readExternalTextFile(absPath: string): ExternalFileContent {
 export function appendExternalFile(prompt: string, file: ExternalFileContent): string {
 	if (file.text !== undefined) {
 		const note = file.truncated ? "\n[... truncated, ask for specific parts if needed]" : "";
-		return `${prompt}\n\n<context_file path="${file.path}">\n${file.text}${note}\n</context_file>`;
-	 }
+		const pathAttribute = file.path
+			.replace(/&/g, "&amp;")
+			.replace(/"/g, "&quot;")
+			.replace(/</g, "&lt;")
+			.replace(/>/g, "&gt;");
+		return `${prompt}\n\n<context_file path="${pathAttribute}">\n` +
+			`External attachment. Use the supplied content instead of searching the vault for this filename.\n` +
+			`Absolute filesystem path: ${file.path}\n\n${file.text}${note}\n</context_file>`;
+	}
 	// Binaries (PDFs included) travel as a path: the agent's read tool handles them.
 	return appendContextFiles(prompt, [file.path]);
 }
@@ -578,11 +584,12 @@ export async function updateSessionPermissions(
 	client: OpenCodeClient,
 	sessionID: string,
 	permissions: PermissionRule[],
+	signal?: AbortSignal,
 ): Promise<void> {
 	await client.session.update({
 		sessionID,
 		permissions,
-	} as unknown as Parameters<OpenCodeClient["session"]["update"]>[0]);
+	} as unknown as Parameters<OpenCodeClient["session"]["update"]>[0], { signal });
 }
 
 export async function switchModel(
@@ -606,10 +613,11 @@ export async function switchAgent(
 	client: OpenCodeClient,
 	sessionID: string,
 	agent: string,
+	signal?: AbortSignal,
 ): Promise<void> {
 	await client.session.switchAgent({ sessionID, agent } as Parameters<
 		OpenCodeClient["session"]["switchAgent"]
-	>[0]);
+	>[0], { signal });
 }
 
 export async function runSessionCommand(

@@ -10,25 +10,49 @@ import { createNodeFetch } from "./node-fetch";
 
 /** Node-stack fetch (no renderer CORS). One instance reused everywhere. */
 const nodeFetch = createNodeFetch();
+type DiscoveredService = Awaited<ReturnType<typeof Service.discover>>;
+let discoveryInFlight: Promise<DiscoveredService> | null = null;
 
 /**
  * Service.discover() probes via global fetch(), which is CORS-blocked in
- * Obsidian's renderer. Temporarily swap in the Node-stack fetch, then
- * restore the original — always, even on failure.
+ * Obsidian's renderer. Temporarily route only loopback /api/info probes
+ * through the Node stack, delegate every other request, and restore the
+ * original fetch only if this scoped wrapper is still installed.
  */
-async function discoverService(): Promise<
-	Awaited<ReturnType<typeof Service.discover>>
-> {
+async function discoverService(): Promise<DiscoveredService> {
+	if (discoveryInFlight) return discoveryInFlight;
 	const original = globalThis.fetch;
-	if (original !== nodeFetch) {
-		(globalThis as { fetch: typeof fetch }).fetch = nodeFetch;
+	if (original === nodeFetch) return Service.discover();
+	const scopedFetch = ((input: string | URL | Request, init?: RequestInit) => {
+		try {
+			const rawUrl = typeof input === "string" || input instanceof URL ? input : input.url;
+			const url = new URL(rawUrl);
+			const host = url.hostname.toLowerCase();
+			const loopback =
+				host === "localhost" ||
+				host === "[::1]" ||
+				host === "::1" ||
+				/^127(?:\.\d{1,3}){3}$/.test(host);
+			if (loopback && url.pathname === "/api/info") return nodeFetch(input, init);
+		} catch {
+			/* Preserve the renderer fetch behavior for inputs we do not recognize. */
+		}
+		return original(input, init);
+	}) as typeof fetch;
+	(globalThis as { fetch: typeof fetch }).fetch = scopedFetch;
+	let pending!: Promise<DiscoveredService>;
+	pending = (async () => {
 		try {
 			return await Service.discover();
 		} finally {
-			(globalThis as { fetch: typeof fetch }).fetch = original;
+			if (globalThis.fetch === scopedFetch) {
+				(globalThis as { fetch: typeof fetch }).fetch = original;
+			}
+			if (discoveryInFlight === pending) discoveryInFlight = null;
 		}
-	}
-	return Service.discover();
+	})();
+	discoveryInFlight = pending;
+	return pending;
 }
 
 export interface Connection {
@@ -124,7 +148,14 @@ export function resolveBinary(configured: string): ResolvedBinary {
 		tried.push(name);
 		if (fs.existsSync(name)) {
 			const behind = exeBehindShim(name);
-			return { path: behind ?? name, tried };
+			if (behind) return { path: behind, tried };
+			const ext = path.extname(name).toLowerCase();
+			if (isWin() && [".cmd", ".bat", ".ps1"].includes(ext)) {
+				throw new Error(
+					`Configured opencode path is a Windows script shim that cannot be spawned directly: ${name}. Set the path to opencode.exe.`,
+				);
+			}
+			return { path: name, tried };
 		}
 		throw new Error(
 			`Configured opencode binary not found: ${name}. Tried: ${tried.join(", ")}`,

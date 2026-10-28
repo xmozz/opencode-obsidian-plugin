@@ -76,7 +76,7 @@ export default class OpenCodePlugin extends Plugin {
 
 		// Connect lazily but eagerly: shared background service = same sessions as CLI.
 		void this.ensureConnected();
-		this.registerInterval(window.setInterval(() => void this.ensureConnected(true), 60_000));
+		this.registerInterval(window.setInterval(() => void this.ensureConnected(true, true), 60_000));
 	}
 
 	onunload(): void {
@@ -131,8 +131,22 @@ export default class OpenCodePlugin extends Plugin {
 		void this.ensureConnected();
 	}
 
-	async ensureConnected(quiet = false): Promise<boolean> {
-		if (this.client || this.connecting) return this.client !== null;
+	async ensureConnected(quiet = false, verifyExisting = false): Promise<boolean> {
+		if (this.connecting) return this.client !== null;
+		if (this.client && !verifyExisting) return true;
+		if (this.client && verifyExisting) {
+			this.connecting = true;
+			try {
+				await this.client.server.info({ signal: AbortSignal.timeout(5000) });
+				return true;
+			} catch {
+				this.client = null;
+				this.endpointUrl = "";
+				this.sharedService = false;
+			} finally {
+				this.connecting = false;
+			}
+		}
 		this.connecting = true;
 		this.chatView()?.setConnecting(true, "opencode is starting…");
 		try {

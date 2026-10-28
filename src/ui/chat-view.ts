@@ -1,4 +1,4 @@
-import { ItemView, WorkspaceLeaf, Notice, Menu, MarkdownRenderer, getIcon } from "obsidian";
+import { ItemView, WorkspaceLeaf, Notice, Menu, getIcon } from "obsidian";
 import type { OpenCodeClient } from "@opencode/client";
 import type OpenCodePlugin from "../main";
 import {
@@ -23,12 +23,26 @@ import {
 	appendExternalFile,
 	isAbsolutePath,
 	isPdfPath,
-	parseUnifiedDiff,
-	countDiff,
 	type VaultSession,
 	type ChatMessage,
 } from "../opencode/sessions";
+import { ChatMessageRenderer } from "./chat-message-renderer";
+import {
+	cssEsc,
+	el,
+	errMsg,
+	fmtCost,
+	fmtTime,
+	fmtTokens,
+	parseModelRef,
+	renderRich,
+	safeJson,
+	summarizeInput,
+	toArray,
+	toolContentText,
+} from "./chat-utils";
 import { FileAttachModal, isAttachablePath } from "./attach-modal";
+import { fileContextReference, getNativeFilePath } from "./file-context";
 import { ModelPickerModal } from "./model-modal";
 import { ConfirmModal } from "./confirm-modal";
 
@@ -91,73 +105,18 @@ function newTabId(): string {
 	return `tab-${Date.now().toString(36)}-${tabCounter}`;
 }
 
-function el<K extends keyof HTMLElementTagNameMap>(
-	tag: K,
-	cls?: string,
-	text?: string,
-): HTMLElementTagNameMap[K] {
-	const e = document.createElement(tag);
-	if (cls) e.className = cls;
-	if (text !== undefined) e.textContent = text;
-	return e;
-}
-
-function fmtTime(ts: number): string {
-	try {
-		return new Date(ts).toLocaleString();
-	} catch {
-		return "";
-	}
-}
-
-/** Short human duration like Grimoire ("12s", "1m 24s", "2h 3m"). */
-function fmtDuration(seconds: number): string {
-	const s = Math.max(0, Math.round(seconds));
-	if (s < 60) return `${s}s`;
-	const m = Math.floor(s / 60);
-	if (m < 60) {
-		const rest = s % 60;
-		return rest > 0 ? `${m}m ${rest}s` : `${m}m`;
-	}
-	const h = Math.floor(m / 60);
-	const restM = m % 60;
-	return restM > 0 ? `${h}h ${restM}m` : `${h}h`;
-}
-
-function escapeHtml(s: string): string {
-	return s
-		.replace(/&/g, "&amp;")
-		.replace(/</g, "&lt;")
-		.replace(/>/g, "&gt;")
-		.replace(/"/g, "&quot;");
-}
-
-import { convertLatexCodeToMath } from "./math";
-
-/** Minimal markdown-ish rendering: code blocks, inline code, bold, links, line breaks. */
-function renderRich(text: string): string {
-	const blocks: string[] = [];
-	let html = escapeHtml(text);
-	html = html.replace(/```(\w*)\n([\s\S]*?)```/g, (_m, lang, code) => {
-		blocks.push(
-			`<pre class="ocs-code"><code>${code.replace(/\n$/, "")}</code></pre>`,
-		);
-		return `\u0000${blocks.length - 1}\u0000`;
-	});
-	html = html
-		.replace(/`([^`\n]+)`/g, "<code class=\"ocs-inline-code\">$1</code>")
-		.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
-		.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2">$1</a>')
-		.replace(/^### (.*)$/gm, "<h4>$1</h4>")
-		.replace(/^## (.*)$/gm, "<h3>$1</h3>")
-		.replace(/^# (.*)$/gm, "<h2>$1</h2>")
-		.replace(/\n/g, "<br>");
-	html = html.replace(/\u0000(\d+)\u0000/g, (_m, i) => blocks[Number(i)] ?? "");
-	return html;
+function setIconOrText(btn: HTMLElement, icon: string, fallback: string, title: string): void {
+	btn.empty();
+	const svg = getIcon(icon);
+	if (svg) btn.appendChild(svg);
+	else btn.textContent = fallback;
+	btn.setAttribute("aria-label", title);
+	btn.title = title;
 }
 
 export class OpenCodeChatView extends ItemView {
 	plugin: OpenCodePlugin;
+	private messageRenderer: ChatMessageRenderer;
 	tabs: TabState[] = [];
 	activeTabId: string | null = null;
 	models: DiscoveredModel[] = [];
@@ -189,6 +148,7 @@ export class OpenCodeChatView extends ItemView {
 	private connectDetail!: HTMLElement;
 	private historyOpen = false;
 	private eventAbort: AbortController | null = null;
+	private modeSyncs = new Map<string, Promise<void>>();
 	private liveAssistant = new Map<string, HTMLElement>();
 	private liveReasoning = new Map<string, HTMLElement>();
 	/** Current (tail) live text block per session, to fork a new block when
@@ -225,6 +185,14 @@ export class OpenCodeChatView extends ItemView {
 	constructor(leaf: WorkspaceLeaf, plugin: OpenCodePlugin) {
 		super(leaf);
 		this.plugin = plugin;
+		this.messageRenderer = new ChatMessageRenderer({
+			app: this.app,
+			component: this,
+			vaultDir: () => this.plugin.vaultDir(),
+			createWorkingBlock: (sessionId) => this.createWorkingBlock(sessionId),
+			paintWorkingMeta: (working, hasReasoning, toolNames) =>
+				this.paintWorkingMeta(working, hasReasoning, toolNames),
+		});
 	}
 
 	getViewType(): string {
@@ -610,7 +578,9 @@ export class OpenCodeChatView extends ItemView {
 	applyPermissionMode(): void {
 		this.renderApproveBtn();
 		this.refreshPickers();
-		for (const t of this.tabs) void this.applySessionMode(t, true);
+		for (const t of this.tabs) {
+			void this.applySessionMode(t, true).catch((e) => this.reportModeSyncFailure(t, e));
+		}
 	}
 
 	/** True when the native `plan` agent is available for read-only mode. */
@@ -718,6 +688,15 @@ export class OpenCodeChatView extends ItemView {
 		agent?: string,
 		variant?: string,
 	): Promise<void> {
+		if (sessionId) {
+			const existing = this.tabs.find((x) => x.sessionId === sessionId);
+			if (existing) {
+				this.activeTabId = existing.tabId;
+				this.renderTabs();
+				this.renderContent();
+				return;
+			}
+		}
 		if (this.tabs.length >= this.plugin.settings.maxTabs) {
 			new Notice(`Max ${this.plugin.settings.maxTabs} tabs open`);
 			return;
@@ -763,14 +742,6 @@ export class OpenCodeChatView extends ItemView {
 				return;
 			}
 		}
-		// If the session already has a tab, just focus it.
-		const existing = this.tabs.find((x) => x.sessionId === sid);
-		if (existing) {
-			this.activeTabId = existing.tabId;
-			this.renderTabs();
-			this.renderContent();
-			return;
-		}
 		const tab: TabState = {
 			tabId: newTabId(),
 			sessionId: sid ?? `pending-${Date.now()}`,
@@ -815,13 +786,15 @@ export class OpenCodeChatView extends ItemView {
 	 * restores the tab's own agent.
 	 *
 	 * Requests are sent sequentially (two concurrent mutations on the same
-	 * session can deadlock the server) and the whole sync is bounded by a
-	 * timeout so a stuck request can never block sending a prompt. The applied
-	 * state is remembered so unchanged tabs are skipped entirely.
+	 * session can deadlock the server). They are abortable and serialized per
+	 * session; the applied state is recorded only after both succeed.
 	 */
 	private async applySessionMode(tab: TabState, force = false): Promise<void> {
+		if (!this.plugin.client || tab.sessionId.startsWith("pending-")) return;
+		const previous = this.modeSyncs.get(tab.sessionId);
+		if (previous) await previous.catch(() => {});
 		const client = this.plugin.client;
-		if (!client || tab.sessionId.startsWith("pending-")) return;
+		if (!client) return;
 		const key = this.modeKey(tab);
 		if (!force && tab.appliedMode === key) return;
 		const readOnly = this.plugin.settings.permissionReadOnly;
@@ -831,13 +804,20 @@ export class OpenCodeChatView extends ItemView {
 			planHandlesEdits: plan,
 		});
 		const agent = plan ? "plan" : tab.agent;
+		const signal = AbortSignal.timeout(6000);
 		const sync = (async () => {
-			await updateSessionPermissions(client, tab.sessionId, rules).catch(() => {});
-			if (agent) await switchAgent(client, tab.sessionId, agent).catch(() => {});
+			await updateSessionPermissions(client, tab.sessionId, rules, signal);
+			if (agent) await switchAgent(client, tab.sessionId, agent, signal);
 		})();
-		const timeout = new Promise<void>((r) => setTimeout(r, 6000));
-		await Promise.race([sync, timeout]);
-		tab.appliedMode = key;
+		this.modeSyncs.set(tab.sessionId, sync);
+		try {
+			await sync;
+			tab.appliedMode = key;
+		} finally {
+			if (this.modeSyncs.get(tab.sessionId) === sync) {
+				this.modeSyncs.delete(tab.sessionId);
+			}
+		}
 	}
 
 	/** Identity of the mode + agent a session should currently carry. */
@@ -849,7 +829,16 @@ export class OpenCodeChatView extends ItemView {
 
 	/** Syncs a single session's mode + permission rules to the current state. */
 	private applyPermissionsToTab(tab: TabState): void {
-		void this.applySessionMode(tab);
+		void this.applySessionMode(tab).catch((e) => this.reportModeSyncFailure(tab, e));
+	}
+
+	private reportModeSyncFailure(tab: TabState, error: unknown): void {
+		if (tab.tabId === this.activeTabId) {
+			this.setStatus(`Permission sync failed: ${errMsg(error)}`);
+		} else {
+			tab.attention = true;
+			this.renderTabs();
+		}
 	}
 
 	private closeTab(tabId: string): void {
@@ -1052,22 +1041,23 @@ export class OpenCodeChatView extends ItemView {
 	private addPickedFiles(files: File[]): void {
 		const tab = this.activeTab();
 		if (!tab || files.length === 0) return;
-		const vaultDir = this.plugin
-			.vaultDir()
-			.replace(/\\/g, "/")
-			.replace(/\/+$/, "")
-			.toLowerCase();
+		const vaultDir = this.plugin.vaultDir();
+		const unresolved: string[] = [];
 		for (const f of files) {
-			const abs = ((f as unknown as { path?: string }).path ?? "").replace(/\\/g, "/");
-			let ref = f.name;
-			if (abs && vaultDir && abs.toLowerCase().startsWith(`${vaultDir}/`)) {
-				ref = abs.slice(vaultDir.length + 1);
-			} else if (abs) {
-				ref = abs;
+			const nativePath = getNativeFilePath(f);
+			if (!nativePath) {
+				unresolved.push(f.name);
+				continue;
 			}
+			const ref = fileContextReference(f.name, vaultDir, nativePath);
 			if (!tab.contextFiles.includes(ref) && tab.activeNote !== ref) {
 				tab.contextFiles.push(ref);
 			}
+		}
+		if (unresolved.length > 0) {
+			new Notice(
+				`Could not get the full filesystem path for: ${unresolved.join(", ")}. Try selecting the file again.`,
+			);
 		}
 		tab.autoAttached = false;
 		this.renderChips();
@@ -1315,240 +1305,17 @@ export class OpenCodeChatView extends ItemView {
 		this.updateUsageBadge();
 	}
 
-	private renderMessage(m: ChatMessage, sessionId: string): HTMLElement {
-		if (m.role === "compaction") {
-			// Distinct "session compacted" divider carrying the CLI's summary.
-			const wrap = el("div", "ocs-msg ocs-compaction");
-			const meta = el("div", "ocs-msg-meta", `🧹 Session compacted · ${fmtTime(m.timestamp)}`);
-			const bubble = el("div", "ocs-bubble");
-			const body = el("div", "ocs-msg-body");
-			this.renderBodyText(body, m.text);
-			bubble.appendChild(body);
-			wrap.appendChild(bubble);
-			wrap.appendChild(meta);
-			return wrap;
-		}
-		if (m.role === "assistant") return this.renderAssistantGroup([m], sessionId);
-		const wrap = el("div", "ocs-msg ocs-user");
-		const meta = el("div", "ocs-msg-meta");
-		const stamp = fmtTime(m.timestamp) + (m.durationSeconds !== undefined ? ` · ${fmtDuration(m.durationSeconds)}` : "");
-		meta.appendChild(el("span", "", stamp));
-		if (m.text) {
-			const copy = el("button", "ocs-copy-btn", "⧉");
-			copy.title = "Copy message text";
-			copy.onclick = async (e) => {
-				e.stopPropagation();
-				try {
-					await navigator.clipboard.writeText(m.text);
-					new Notice("Message copied");
-				} catch {
-					new Notice("Could not access clipboard");
-				}
-			};
-			meta.appendChild(copy);
-		}
-		const bubble = el("div", "ocs-bubble");
-		if (m.text) {
-			const body = el("div", "ocs-msg-body");
-			// Plain text: exactly the line breaks the user typed, no
-			// paragraph gaps from Markdown processing.
-			body.textContent = m.text;
-			bubble.appendChild(body);
-		}
-		if (m.error) {
-			bubble.appendChild(el("div", "ocs-error-block", `Error: ${m.error}`));
-		}
-		wrap.appendChild(bubble);
-		wrap.appendChild(meta);
-		return wrap;
+	private renderMessage(message: ChatMessage, sessionId: string): HTMLElement {
+		return this.messageRenderer.renderMessage(message, sessionId);
 	}
 
-	/**
-	 * One answer bubble for a whole turn. opencode splits a turn into several
-	 * assistant messages (one per step); all of their thinking + tool calls are
-	 * folded into a single "Working" block so only the actual answer text
-	 * remains visible.
-	 */
-	private renderAssistantGroup(msgs: ChatMessage[], sessionId: string): HTMLElement {
-		const wrap = el("div", "ocs-msg ocs-assistant");
-		const bubble = el("div", "ocs-bubble");
-		const reasoning = msgs.flatMap((m) => m.reasoning);
-		const tools = msgs.flatMap((m) => m.tools);
-		if (reasoning.length > 0 || tools.length > 0) {
-			const working = this.createWorkingBlock(sessionId);
-			if (reasoning.length > 0) {
-				const thinking = document.createElement("details");
-				thinking.className = "ocs-working-thinking";
-				thinking.open = false;
-				const tsum = el("summary", "ocs-working-sub", "Thinking");
-				thinking.appendChild(tsum);
-				const box = el("div", "ocs-working-reasoning");
-				for (const r of reasoning) {
-					const d = el("div", "ocs-thinking-text");
-					d.innerHTML = renderRich(r);
-					box.appendChild(d);
-				}
-				thinking.appendChild(box);
-				working.body.appendChild(thinking);
-			}
-			for (const t of tools) {
-				working.body.appendChild(this.renderTool(t));
-			}
-			this.paintWorkingMeta(
-				working,
-				reasoning.length > 0,
-				tools.map((t) => t.tool ?? "tool"),
-			);
-			bubble.appendChild(working.root);
-		}
-		for (const m of msgs) {
-			if (m.text) {
-				const body = el("div", "ocs-msg-body");
-				this.renderBodyText(body, m.text);
-				bubble.appendChild(body);
-			}
-			if (m.error) {
-				bubble.appendChild(el("div", "ocs-error-block", `Error: ${m.error}`));
-			}
-		}
-		const last = msgs[msgs.length - 1];
-		const text = msgs.map((m) => m.text).filter(Boolean).join("\n\n");
-		const meta = el("div", "ocs-msg-meta");
-		const duration = msgs.reduce(
-			(acc, m) => acc + (m.durationSeconds ?? 0),
-			0,
-		);
-		const stamp =
-			fmtTime(last.timestamp) +
-			(msgs.some((m) => m.durationSeconds !== undefined)
-				? ` · ${fmtDuration(duration)}`
-				: "");
-		meta.appendChild(el("span", "", stamp));
-		if (text) {
-			const copy = el("button", "ocs-copy-btn", "⧉");
-			copy.title = "Copy message text";
-			copy.onclick = async (e) => {
-				e.stopPropagation();
-				try {
-					await navigator.clipboard.writeText(text);
-					new Notice("Message copied");
-				} catch {
-					new Notice("Could not access clipboard");
-				}
-			};
-			meta.appendChild(copy);
-		}
-		wrap.appendChild(bubble);
-		wrap.appendChild(meta);
-		return wrap;
+	private renderAssistantGroup(messages: ChatMessage[], sessionId: string): HTMLElement {
+		return this.messageRenderer.renderAssistantGroup(messages, sessionId);
 	}
 
-	/**
-	 * Renders message text with Obsidian's full Markdown pipeline (callouts,
-	 * tables, task lists, highlights, quotes, math, …). Code spans/blocks
-	 * that actually contain LaTeX are converted to $ math first so they
-	 * typeset instead of showing as code.
-	 */
-	private renderBodyText(container: HTMLElement, text: string): void {
-		const converted = convertLatexCodeToMath(text);
-		const div = document.createElement("div");
-		// Obsidian's default Markdown element styles (blockquotes, tables,
-		// lists, headings, …) are scoped to .markdown-rendered, so without
-		// this class quotes lose their bar and tables their borders.
-		div.classList.add("markdown-rendered");
-		container.appendChild(div);
-		MarkdownRenderer.render(this.app, converted, div, "", this).catch(() => {
-			div.innerHTML = renderRich(text);
-		});
+	private shortPath(path: string): string {
+		return this.messageRenderer.shortPath(path);
 	}
-
-	private renderTool(t: {
-		tool?: string;
-		input?: Record<string, unknown>;
-		output?: string;
-		status?: string;
-		diffs?: Array<{ file: string; patch: string; created?: boolean }>;
-		filePath?: string;
-	}): HTMLElement {
-		const name = t.tool ?? "tool";
-		const status = t.status ?? "completed";
-		const input = t.input ?? {};
-		const det = document.createElement("details");
-		det.className = `ocs-toolcall ocs-${status}`;
-		const sum = document.createElement("summary");
-		const dot = el("span", "ocs-tool-dot");
-		sum.appendChild(dot);
-		if (t.diffs?.length) {
-			const files = t.diffs.map((d) => this.shortPath(d.file)).join(", ");
-			const allCreated = t.diffs.every((d) => d.created);
-			const total = t.diffs.reduce(
-				(acc, d) => {
-					const c = countDiff(d.patch);
-					return { added: acc.added + c.added, removed: acc.removed + c.removed };
-				},
-				{ added: 0, removed: 0 },
-			);
-			sum.appendChild(
-				el("span", "ocs-tool-name", `${allCreated ? "Created" : "Edited"} ${files}`),
-			);
-			sum.appendChild(el("span", "ocs-diff-stats", `+${total.added} −${total.removed}`));
-			det.open = false;
-		} else {
-			sum.appendChild(el("span", "ocs-tool-name", name));
-			const short = t.filePath
-				? this.shortPath(t.filePath)
-				: summarizeInput(input);
-			if (short) sum.appendChild(el("span", "ocs-tool-arg", short));
-		}
-		det.appendChild(sum);
-		if (t.diffs?.length) {
-			for (const d of t.diffs) det.appendChild(this.renderFileDiff(d.file, d.patch));
-		} else if (t.filePath && (name === "write" || name === "edit")) {
-			const content = typeof input.content === "string" ? input.content : "";
-			const lines = content ? content.split("\n").length : 0;
-			det.appendChild(
-				el(
-					"div",
-					"ocs-diff-file",
-					`${name === "write" ? "Created" : "Edited"} ${this.shortPath(t.filePath)}${lines ? ` · ${lines} lines` : ""}`,
-				),
-			);
-		}
-		const inp = el("pre", "ocs-tool-input", safeJson(input));
-		det.appendChild(inp);
-		if (t.output) det.appendChild(el("pre", "ocs-tool-output", t.output.slice(0, 4000)));
-		return det;
-	}
-
-	/** Vault-relative display path (falls back to basename). */
-	private shortPath(p: string): string {
-		const vault = this.plugin.vaultDir().replace(/\\/g, "/").replace(/\/+$/, "");
-		const norm = p.replace(/\\/g, "/");
-		if (vault && norm.toLowerCase().startsWith(vault.toLowerCase() + "/")) {
-			return norm.slice(vault.length + 1);
-		}
-		const base = norm.split("/").pop() ?? p;
-		return base;
-	}
-
-	private renderFileDiff(file: string, patch: string): HTMLElement {
-		const box = el("div", "ocs-diff");
-		box.appendChild(el("div", "ocs-diff-file", this.shortPath(file)));
-		const lines = el("div", "ocs-diff-lines");
-		const cls: Record<string, string> = {
-			hunk: "ocs-diff-hunk",
-			add: "ocs-diff-add",
-			del: "ocs-diff-del",
-			ctx: "ocs-diff-ctx",
-			note: "ocs-diff-note",
-		};
-		for (const line of parseUnifiedDiff(patch)) {
-			lines.appendChild(el("div", cls[line.kind], line.text));
-		}
-		box.appendChild(lines);
-		return box;
-	}
-
 	private async ensureLoaded(tab: TabState): Promise<void> {
 		if (tab.loaded) {
 			this.renderContent();
@@ -1921,7 +1688,7 @@ export class OpenCodeChatView extends ItemView {
 		const vaultRefs = extra.filter((f) => !isAbsolutePath(f));
 		if (vaultRefs.length > 0) text = appendContextFiles(text, vaultRefs);
 		for (const abs of extra.filter((f) => isAbsolutePath(f))) {
-			text = appendExternalFile(text, readExternalTextFile(abs));
+			text = appendExternalFile(text, await readExternalTextFile(abs));
 		}
 		const files = tab.images.map((i) => ({ uri: i.dataUrl }));
 		try {
@@ -3563,84 +3330,4 @@ export class OpenCodeChatView extends ItemView {
 		// Apply the current permission mode to any sessions restored on load.
 		this.applyPermissionMode();
 	}
-}
-
-/** Parses a "provider/id" model string into its parts. */
-function parseModelRef(v: string): { providerID: string; id: string } | null {
-	if (!v) return null;
-	const [providerID, ...rest] = v.split("/");
-	const id = rest.join("/");
-	if (!providerID || !id) return null;
-	return { providerID, id };
-}
-
-function toArray(v: unknown): unknown[] {
-	if (Array.isArray(v)) return v;
-	if (v && typeof v === "object") {
-		const r = v as Record<string, unknown>;
-		if (Array.isArray(r.data)) return r.data as unknown[];
-	}
-	return [];
-}
-
-function errMsg(e: unknown): string {
-	return e instanceof Error ? e.message : String(e);
-}
-
-function safeJson(v: Record<string, unknown>): string {
-	try {
-		return JSON.stringify(v, null, 2).slice(0, 2000);
-	} catch {
-		return String(v);
-	}
-}
-
-function summarizeInput(input: Record<string, unknown>): string {
-	const keys = ["file", "path", "files", "command", "pattern", "query", "url"];
-	for (const k of keys) {
-		const v = input[k];
-		if (typeof v === "string" && v) return v.length > 60 ? v.slice(0, 59) + "…" : v;
-		if (Array.isArray(v) && v.length > 0) return String(v[0]).slice(0, 60);
-	}
-	const first = Object.values(input)[0];
-	if (typeof first === "string") return first.slice(0, 60);
-	return "";
-}
-
-function fmtTokens(n: number): string {
-	if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
-	if (n >= 1000) return `${(n / 1000).toFixed(1)}k`;
-	return String(n);
-}
-
-function fmtCost(c: number): string {
-	return c.toFixed(4).replace(/0+$/, "").replace(/\.$/, ".0");
-}
-
-function toolContentText(content: unknown): string {
-	if (!Array.isArray(content)) return "";
-	const parts: string[] = [];
-	for (const c of content as Array<Record<string, unknown>>) {
-		if (!c || typeof c !== "object") continue;
-		if (c.type === "text" && typeof c.text === "string" && c.text) {
-			parts.push(c.text);
-		} else if (c.type === "file") {
-			parts.push(`[file: ${String(c.name ?? c.uri ?? "file")}]`);
-		}
-	}
-	return parts.join("\n");
-}
-
-function cssEsc(s: string): string {
-	return s.replace(/["\\]/g, "\\$&");
-}
-
-/** Lucide icon with a text fallback when the icon set lacks the name. */
-function setIconOrText(btn: HTMLElement, icon: string, fallback: string, title: string): void {
-	btn.empty();
-	const svg = getIcon(icon);
-	if (svg) btn.appendChild(svg);
-	else btn.textContent = fallback;
-	btn.setAttribute("aria-label", title);
-	btn.title = title;
 }
