@@ -435,45 +435,87 @@ button.ocs-copy-btn:active {
 	font-size: calc(var(--ocs-fs, 13px) - 1px);
 }
 
-.ocs-thinking {
+/* ---- "Working" collapser: thinking + tool calls behind one header ---- */
+.ocs-working {
 	border-left: 2px solid var(--background-modifier-border);
 	padding-left: 8px;
-	color: var(--text-muted);
-	font-size: calc(var(--ocs-fs, 13px) - 1px);
+	margin: 4px 0 8px;
 	max-width: 100%;
 	min-width: 0;
-	overflow: hidden;
 }
 
-.ocs-thinking-head {
+.ocs-working-summary {
 	display: flex;
 	align-items: center;
 	gap: 6px;
 	cursor: pointer;
-	background: none;
-	border: 0;
 	padding: 2px 6px;
 	margin: 0 0 0 -6px;
-	font: inherit;
+	border-radius: 6px;
+	font-size: calc(var(--ocs-fs, 13px) - 1px);
 	font-weight: 500;
 	color: var(--text-muted);
 	text-align: left;
-	border-radius: 6px;
-	box-shadow: none;
+	list-style: none;
+	user-select: none;
 }
 
-.ocs-thinking-head:hover {
+/* Hide the native disclosure triangle — the caret span replaces it. */
+.ocs-working-summary::-webkit-details-marker {
+	display: none;
+}
+
+.ocs-working-summary::marker {
+	content: "";
+}
+
+.ocs-working-summary:hover {
 	background: var(--background-modifier-hover);
 	color: var(--text-normal);
 }
 
-.ocs-thinking-caret {
+.ocs-working-caret {
+	display: inline-block;
 	font-size: 10px;
 	line-height: 1;
+	transition: transform 0.12s ease;
 }
 
-.ocs-thinking-body.ocs-collapsed {
-	display: none;
+.ocs-working[open] > .ocs-working-summary .ocs-working-caret {
+	transform: rotate(90deg);
+}
+
+.ocs-working-meta {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	font-family: var(--font-monospace);
+	font-size: calc(var(--ocs-fs, 13px) - 3px);
+	color: var(--text-faint);
+}
+
+.ocs-working-body {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+	padding: 4px 0 2px;
+	min-width: 0;
+}
+
+.ocs-working-reasoning {
+	min-width: 0;
+	color: var(--text-muted);
+	font-size: calc(var(--ocs-fs, 13px) - 1px);
+}
+
+.ocs-working-sub {
+	font-size: calc(var(--ocs-fs, 13px) - 3px);
+	font-weight: 600;
+	letter-spacing: 0.04em;
+	text-transform: uppercase;
+	color: var(--text-faint);
+	margin-bottom: 2px;
 }
 
 .ocs-thinking-text {
@@ -620,16 +662,9 @@ button.ocs-copy-btn:active {
 	line-height: 1.55;
 }
 
-.ocs-live-reasoning {
-	border-left: 2px solid var(--text-accent);
-	padding-left: 8px;
+.ocs-live-reasoning-text {
 	color: var(--text-muted);
 	font-size: calc(var(--ocs-fs, 13px) - 1px);
-	margin: 6px 0;
-}
-
-.ocs-live-reasoning .ocs-thinking-body {
-	margin: 4px 0;
 	white-space: pre-wrap;
 	overflow-wrap: anywhere;
 	word-break: break-word;

@@ -16,6 +16,8 @@ export interface PluginSettings {
 	notifyWithContent: boolean;
 	sendWithButtonOnly: boolean;
 	refreshOnOpen: boolean;
+	/** When true, the "Working" block (reasoning + tool calls) starts expanded. */
+	workingExpanded: boolean;
 }
 
 export const DEFAULT_SETTINGS: PluginSettings = {
@@ -34,6 +36,7 @@ export const DEFAULT_SETTINGS: PluginSettings = {
 	notifyWithContent: true,
 	sendWithButtonOnly: false,
 	refreshOnOpen: true,
+	workingExpanded: false,
 };
 
 export function parseEnvText(text: string): Record<string, string> {

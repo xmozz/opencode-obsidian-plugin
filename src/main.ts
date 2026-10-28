@@ -298,6 +298,18 @@ class OpenCodeSettingTab extends PluginSettingTab {
 				}),
 			);
 		new Setting(containerEl)
+			.setName("Always expand working details")
+			.setDesc(
+				"Thinking and tool calls are folded into a collapsed “Working” block so only the answer is visible. Enable this to have that block expanded by default (you can still collapse it per session).",
+			)
+			.addToggle((t) =>
+				t.setValue(this.plugin.settings.workingExpanded).onChange(async (v) => {
+					this.plugin.settings.workingExpanded = v;
+					await this.plugin.saveSettings();
+					this.plugin.chatView()?.applyWorkingExpanded();
+				}),
+			);
+		new Setting(containerEl)
 			.setName("Send only with button")
 			.setDesc("Disable Enter-to-send in the composer.")
 			.addToggle((t) =>

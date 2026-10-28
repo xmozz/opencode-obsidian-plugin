@@ -201,6 +201,10 @@ export class OpenCodeChatView extends ItemView {
 	private queueBar!: HTMLElement;
 	private lastEsc = 0;
 	private liveTools = new Map<string, Map<string, LiveToolState>>();
+	/** "Working" collapser per session (falls back to the setting). */
+	private liveWorking = new Map<string, HTMLDetailsElement>();
+	/** User-chosen expand state of "Working" blocks, per session. */
+	private workingOpen = new Map<string, boolean>();
 	/** Permission requests waiting for a reply, keyed by sessionId. */
 	private pendingPermissions = new Map<
 		string,
@@ -837,6 +841,7 @@ export class OpenCodeChatView extends ItemView {
 			this.liveAssistant.get(removed.sessionId)?.remove();
 			this.liveAssistant.delete(removed.sessionId);
 			this.liveReasoning.delete(`${removed.sessionId}-r`);
+			this.liveWorking.delete(removed.sessionId);
 			this.liveText.delete(removed.sessionId);
 			this.liveTools.delete(removed.sessionId);
 			this.pendingPermissions.delete(removed.sessionId);
@@ -1214,7 +1219,22 @@ export class OpenCodeChatView extends ItemView {
 				el("div", "ocs-empty", "Empty session — say hello."),
 			);
 		}
-		for (const m of tab.messages) list.appendChild(this.renderMessage(m));
+		const msgs = tab.messages;
+		for (let i = 0; i < msgs.length; i++) {
+			const m = msgs[i];
+			if (m.role === "assistant") {
+				// A turn is split into one assistant message per step; render
+				// them as a single answer with one shared "Working" block.
+				const group = [m];
+				while (i + 1 < msgs.length && msgs[i + 1].role === "assistant") {
+					i++;
+					group.push(msgs[i]);
+				}
+				list.appendChild(this.renderAssistantGroup(group, tab.sessionId));
+				continue;
+			}
+			list.appendChild(this.renderMessage(m, tab.sessionId));
+		}
 		for (const q of this.queuedFor(tab.tabId)) {
 			const wrap = el("div", "ocs-msg ocs-user ocs-queued");
 			const bubble = el("div", "ocs-bubble");
@@ -1234,7 +1254,7 @@ export class OpenCodeChatView extends ItemView {
 		this.updateUsageBadge();
 	}
 
-	private renderMessage(m: ChatMessage): HTMLElement {
+	private renderMessage(m: ChatMessage, sessionId: string): HTMLElement {
 		if (m.role === "compaction") {
 			// Distinct "session compacted" divider carrying the CLI's summary.
 			const wrap = el("div", "ocs-msg ocs-compaction");
@@ -1247,7 +1267,8 @@ export class OpenCodeChatView extends ItemView {
 			wrap.appendChild(meta);
 			return wrap;
 		}
-		const wrap = el("div", `ocs-msg ocs-${m.role}`);
+		if (m.role === "assistant") return this.renderAssistantGroup([m], sessionId);
+		const wrap = el("div", "ocs-msg ocs-user");
 		const meta = el("div", "ocs-msg-meta");
 		const stamp = fmtTime(m.timestamp) + (m.durationSeconds !== undefined ? ` · ${fmtDuration(m.durationSeconds)}` : "");
 		meta.appendChild(el("span", "", stamp));
@@ -1266,31 +1287,90 @@ export class OpenCodeChatView extends ItemView {
 			meta.appendChild(copy);
 		}
 		const bubble = el("div", "ocs-bubble");
-		if (m.reasoning.length > 0) {
-			const thinking = this.createThinkingBlock();
-			for (const r of m.reasoning) {
-				const d = el("div", "ocs-thinking-text");
-				d.innerHTML = renderRich(r);
-				thinking.body.appendChild(d);
-			}
-			bubble.appendChild(thinking.root);
-		}
-		for (const t of m.tools) {
-			bubble.appendChild(this.renderTool(t));
-		}
 		if (m.text) {
 			const body = el("div", "ocs-msg-body");
-			if (m.role === "user") {
-				// Plain text: exactly the line breaks the user typed, no
-				// paragraph gaps from Markdown processing.
-				body.textContent = m.text;
-			} else {
-				this.renderBodyText(body, m.text);
-			}
+			// Plain text: exactly the line breaks the user typed, no
+			// paragraph gaps from Markdown processing.
+			body.textContent = m.text;
 			bubble.appendChild(body);
 		}
 		if (m.error) {
 			bubble.appendChild(el("div", "ocs-error-block", `Error: ${m.error}`));
+		}
+		wrap.appendChild(bubble);
+		wrap.appendChild(meta);
+		return wrap;
+	}
+
+	/**
+	 * One answer bubble for a whole turn. opencode splits a turn into several
+	 * assistant messages (one per step); all of their thinking + tool calls are
+	 * folded into a single "Working" block so only the actual answer text
+	 * remains visible.
+	 */
+	private renderAssistantGroup(msgs: ChatMessage[], sessionId: string): HTMLElement {
+		const wrap = el("div", "ocs-msg ocs-assistant");
+		const bubble = el("div", "ocs-bubble");
+		const reasoning = msgs.flatMap((m) => m.reasoning);
+		const tools = msgs.flatMap((m) => m.tools);
+		if (reasoning.length > 0 || tools.length > 0) {
+			const working = this.createWorkingBlock(sessionId);
+			if (reasoning.length > 0) {
+				const box = el("div", "ocs-working-reasoning");
+				box.appendChild(el("div", "ocs-working-sub", "Thinking"));
+				for (const r of reasoning) {
+					const d = el("div", "ocs-thinking-text");
+					d.innerHTML = renderRich(r);
+					box.appendChild(d);
+				}
+				working.body.appendChild(box);
+			}
+			for (const t of tools) {
+				working.body.appendChild(this.renderTool(t));
+			}
+			this.paintWorkingMeta(
+				working,
+				reasoning.length > 0,
+				tools.map((t) => t.tool ?? "tool"),
+			);
+			bubble.appendChild(working.root);
+		}
+		for (const m of msgs) {
+			if (m.text) {
+				const body = el("div", "ocs-msg-body");
+				this.renderBodyText(body, m.text);
+				bubble.appendChild(body);
+			}
+			if (m.error) {
+				bubble.appendChild(el("div", "ocs-error-block", `Error: ${m.error}`));
+			}
+		}
+		const last = msgs[msgs.length - 1];
+		const text = msgs.map((m) => m.text).filter(Boolean).join("\n\n");
+		const meta = el("div", "ocs-msg-meta");
+		const duration = msgs.reduce(
+			(acc, m) => acc + (m.durationSeconds ?? 0),
+			0,
+		);
+		const stamp =
+			fmtTime(last.timestamp) +
+			(msgs.some((m) => m.durationSeconds !== undefined)
+				? ` · ${fmtDuration(duration)}`
+				: "");
+		meta.appendChild(el("span", "", stamp));
+		if (text) {
+			const copy = el("button", "ocs-copy-btn", "⧉");
+			copy.title = "Copy message text";
+			copy.onclick = async (e) => {
+				e.stopPropagation();
+				try {
+					await navigator.clipboard.writeText(text);
+					new Notice("Message copied");
+				} catch {
+					new Notice("Could not access clipboard");
+				}
+			};
+			meta.appendChild(copy);
 		}
 		wrap.appendChild(bubble);
 		wrap.appendChild(meta);
@@ -2449,36 +2529,104 @@ export class OpenCodeChatView extends ItemView {
 	};
 
 	/**
-	 * Collapsible "Thinking" block: an always-visible header (collapsed by
-	 * default) that expands to reveal the reasoning. Used for both the finished
-	 * message and the live stream, so the label is visible while the model is
-	 * still thinking without pushing the actual answer out of view.
+	 * Collapsible "Working" block that gathers everything the agent does
+	 * (thinking + tool calls). The answer text always stays outside of it.
+	 * Collapsed unless the user expanded it for this session or enabled the
+	 * "always expand working" setting.
 	 */
-	private createThinkingBlock(): { root: HTMLElement; body: HTMLElement } {
-		const root = el("div", "ocs-thinking");
-		const head = el("button", "ocs-thinking-head");
-		head.type = "button";
-		head.setAttribute("aria-expanded", "false");
-		const caret = el("span", "ocs-thinking-caret", "▸");
-		const label = el("span", "ocs-thinking-label", "Thinking");
-		head.appendChild(caret);
-		head.appendChild(label);
-		const body = el("div", "ocs-thinking-body ocs-collapsed");
-		root.appendChild(head);
+	private createWorkingBlock(sessionId: string): {
+		root: HTMLDetailsElement;
+		body: HTMLElement;
+		meta: HTMLElement;
+	} {
+		const root = document.createElement("details");
+		root.className = "ocs-working";
+		root.dataset.session = sessionId;
+		root.open = this.workingIsOpen(sessionId);
+		const sum = el("summary", "ocs-working-summary");
+		sum.appendChild(el("span", "ocs-working-caret", "▸"));
+		sum.appendChild(el("span", "ocs-working-label", "Working"));
+		const meta = el("span", "ocs-working-meta", "");
+		sum.appendChild(meta);
+		const body = el("div", "ocs-working-body");
+		root.appendChild(sum);
 		root.appendChild(body);
-		head.addEventListener("click", (e) => {
-			e.stopPropagation();
-			const collapsed = body.classList.toggle("ocs-collapsed");
-			caret.textContent = collapsed ? "▸" : "▾";
-			head.setAttribute("aria-expanded", String(!collapsed));
+		// Remember the user's choice so a re-render (turn end, tab switch)
+		// keeps the same expand state. The initial programmatic `open` also
+		// fires a toggle event, hence the deferred "ready" flag.
+		let ready = false;
+		root.addEventListener("toggle", () => {
+			if (!ready) return;
+			this.workingOpen.set(sessionId, root.open);
+			// Keep every finished turn of this session in the same state —
+			// both live and re-rendered blocks follow the session preference.
+			const sel = `.ocs-working[data-session="${cssEsc(sessionId)}"]`;
+			this.content.querySelectorAll<HTMLDetailsElement>(sel).forEach((d) => {
+				if (d.open !== root.open) d.open = root.open;
+			});
 		});
-		return { root, body };
+		window.setTimeout(() => {
+			ready = true;
+		}, 0);
+		return { root, body, meta };
 	}
 
-	private createLiveReasoning(): HTMLElement {
-		const thinking = this.createThinkingBlock();
-		thinking.root.classList.add("ocs-live-reasoning");
-		return thinking.root;
+	private workingIsOpen(sessionId: string): boolean {
+		return this.workingOpen.get(sessionId) ?? this.plugin.settings.workingExpanded;
+	}
+
+	/** Compact collapsed-state hint: which kinds of work happened. */
+	private paintWorkingMeta(
+		working: { meta: HTMLElement },
+		hasReasoning: boolean,
+		toolNames: string[],
+	): void {
+		const names: string[] = hasReasoning ? ["thinking"] : [];
+		for (const name of toolNames) {
+			if (name && !names.includes(name)) names.push(name);
+		}
+		working.meta.textContent = names.join(" · ");
+	}
+
+	/** Refreshes the collapsed-summary hint of the live "Working" block. */
+	private refreshLiveWorkingMeta(tab: TabState): void {
+		const det = this.liveWorking.get(tab.sessionId);
+		if (!det) return;
+		const body = det.querySelector(".ocs-working-body") as HTMLElement | null;
+		const meta = det.querySelector(".ocs-working-meta") as HTMLElement | null;
+		if (!body || !meta) return;
+		const names: string[] = [];
+		for (const st of this.liveTools.get(tab.sessionId)?.values() ?? []) {
+			names.push(st.name);
+		}
+		this.paintWorkingMeta(
+			{ meta },
+			body.querySelector(".ocs-live-reasoning-text") !== null,
+			names,
+		);
+	}
+
+	/** Applies the "always expand working" setting to open blocks. */
+	applyWorkingExpanded(): void {
+		this.workingOpen.clear();
+		for (const det of this.liveWorking.values()) {
+			det.open = this.plugin.settings.workingExpanded;
+		}
+		this.renderContent();
+	}
+
+	/** Live "Working" container inside the streaming assistant bubble. */
+	private ensureLiveWorking(tab: TabState, live: HTMLElement): HTMLElement {
+		let det = this.liveWorking.get(tab.sessionId);
+		if (!det) {
+			det = this.createWorkingBlock(tab.sessionId).root;
+			this.liveWorking.set(tab.sessionId, det);
+		}
+		if (det.parentElement !== live) {
+			// Always above the streamed answer text.
+			live.insertBefore(det, live.firstChild);
+		}
+		return det;
 	}
 
 	private ensureLiveAssistant(tab: TabState): HTMLElement {
@@ -2546,7 +2694,9 @@ export class OpenCodeChatView extends ItemView {
 				status: "running",
 			};
 			map.set(toolId, st);
-			live.appendChild(node);
+			const working = this.ensureLiveWorking(tab, live);
+			const body = working.querySelector(".ocs-working-body");
+			(body ?? working).appendChild(node);
 			const list = this.messageListEl();
 			if (list && tab.tabId === this.activeTabId) this.scrollListToBottom(list);
 		}
@@ -2555,6 +2705,7 @@ export class OpenCodeChatView extends ItemView {
 		if (patch.status !== undefined) st.status = patch.status;
 		if (patch.output !== undefined) st.output = patch.output;
 		this.paintLiveTool(st);
+		this.refreshLiveWorkingMeta(tab);
 		this.scrollLiveToBottom(tab);
 		return st;
 	}
@@ -2724,6 +2875,7 @@ export class OpenCodeChatView extends ItemView {
 						live.remove();
 						this.liveAssistant.delete(tab.sessionId);
 						this.liveReasoning.delete(`${tab.sessionId}-r`);
+						this.liveWorking.delete(tab.sessionId);
 						this.liveText.delete(tab.sessionId);
 					}
 					this.liveTools.delete(tab.sessionId);
@@ -2837,22 +2989,24 @@ export class OpenCodeChatView extends ItemView {
 			case "session.reasoning.delta": {
 				if (tab) {
 					const live = this.ensureLiveAssistant(tab);
-					const key = `${tab.sessionId}-r`;
-					let r = this.liveReasoning.get(key);
-					if (!r || r.parentElement !== live) {
-						r = this.createLiveReasoning();
-						this.liveReasoning.set(key, r);
-						live.appendChild(r);
-					} else if (live.lastElementChild !== r) {
-						// Reasoning resumed after a tool/text card — start a new
-						// thinking block at the bottom instead of extending the old one.
-						r = this.createLiveReasoning();
-						this.liveReasoning.set(key, r);
-						live.appendChild(r);
-					}
-					const body = r.querySelector(".ocs-thinking-body");
+					const working = this.ensureLiveWorking(tab, live);
+					const body = working.querySelector(".ocs-working-body") as HTMLElement | null;
 					if (body) {
-						body.textContent = (body.textContent ?? "") + String(data.delta ?? "");
+						const key = `${tab.sessionId}-r`;
+						let r = this.liveReasoning.get(key);
+						if (!r || r.parentElement !== body) {
+							r = el("div", "ocs-live-reasoning-text");
+							this.liveReasoning.set(key, r);
+							body.appendChild(r);
+						} else if (body.lastElementChild !== r) {
+							// Reasoning resumed after a tool card — start a new
+							// text node so the order inside "Working" stays intact.
+							r = el("div", "ocs-live-reasoning-text");
+							this.liveReasoning.set(key, r);
+							body.appendChild(r);
+						}
+						r.textContent = (r.textContent ?? "") + String(data.delta ?? "");
+						this.refreshLiveWorkingMeta(tab);
 					}
 					this.scrollLiveToBottom(tab);
 				}
