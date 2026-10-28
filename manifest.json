@@ -1,7 +1,7 @@
 {
 	"id": "opencode-sync",
 	"name": "OpenCode Sync",
-	"version": "0.5.0",
+	"version": "0.5.1",
 	"minAppVersion": "1.13.0",
 	"description": "Chat with the OpenCode agent (requires opencode 2.x) in a side panel. Answers render as Obsidian Markdown and use Obsidian syntax. Shares native sessions with the CLI - no extra files.",
 	"author": "xmozz",

@@ -169,6 +169,7 @@ export class OpenCodeChatView extends ItemView {
 	private lastStatus = "Not connected";
 
 	private root!: HTMLElement;
+	private fontSizeWheelHandler: ((e: WheelEvent) => void) | null = null;
 	private tabBar!: HTMLElement;
 	private content!: HTMLElement;
 	private historyPanel!: HTMLElement;
@@ -242,8 +243,9 @@ export class OpenCodeChatView extends ItemView {
 		this.root = this.containerEl.children[1] as HTMLElement;
 		this.root.empty();
 		this.root.addClass("ocs-container");
-		this.applyFontSize();
+		this.registerFontSizeWheel();
 		this.buildShell();
+		this.applyFontSize();
 		this.restoreTabs();
 		this.autoAttachOnOpen();
 		if (!this.plugin.client) {
@@ -272,6 +274,10 @@ export class OpenCodeChatView extends ItemView {
 
 	async onClose(): Promise<void> {
 		this.eventAbort?.abort();
+		if (this.fontSizeWheelHandler) {
+			window.removeEventListener("wheel", this.fontSizeWheelHandler, true);
+			this.fontSizeWheelHandler = null;
+		}
 		this.persistTabs();
 	}
 
@@ -299,6 +305,21 @@ export class OpenCodeChatView extends ItemView {
 		nav.appendChild(actions);
 		this.usageBadge = el("span", "ocs-usage-badge", "");
 		this.usageBadge.title = "Tokens · cost · context window";
+		const fontDecBtn = el("button", "ocs-icon-btn", "A−");
+		fontDecBtn.title = "Schrift verkleinern";
+		fontDecBtn.onclick = () => this.adjustFontSize(-1);
+		actions.appendChild(fontDecBtn);
+
+		const fontIncBtn = el("button", "ocs-icon-btn", "A+");
+		fontIncBtn.title = "Schrift vergrößern";
+		fontIncBtn.onclick = () => this.adjustFontSize(1);
+		actions.appendChild(fontIncBtn);
+
+		const fontResetBtn = el("button", "ocs-icon-btn", "A");
+		fontResetBtn.title = "Schrift zurücksetzen";
+		fontResetBtn.onclick = () => this.resetFontSize();
+		actions.appendChild(fontResetBtn);
+
 		const histBtn = el("button", "ocs-icon-btn", "☰");
 		histBtn.title = "Sessions (/session) — shared with CLI";
 		histBtn.onclick = () => this.toggleHistory();
@@ -1162,10 +1183,50 @@ export class OpenCodeChatView extends ItemView {
 
 	// ---------- messages ----------
 
+	/** Ctrl/Cmd + mouse wheel scales the chat font size while over the chat. */
+	private registerFontSizeWheel(): void {
+		const handler = (e: WheelEvent) => {
+			if (!e.ctrlKey && !e.metaKey) return;
+			const target = e.target as HTMLElement | null;
+			const inChat = !!target?.closest?.(".ocs-container");
+			if (!inChat) return;
+			e.preventDefault();
+			e.stopImmediatePropagation();
+			const delta = e.deltaY < 0 ? 1 : -1;
+			const current = this.plugin.settings.fontSize || 13;
+			const next = Math.min(24, Math.max(9, current + delta));
+			if (next === current) return;
+			this.plugin.settings.fontSize = next;
+			void this.plugin.saveSettings();
+			this.applyFontSize();
+		};
+		this.fontSizeWheelHandler = handler;
+		window.addEventListener("wheel", handler, { passive: false, capture: true });
+	}
+
 	/** Applies the configured base font size (all UI text scales with it). */
 	applyFontSize(): void {
 		const size = Math.min(24, Math.max(9, this.plugin.settings.fontSize || 13));
-		this.root?.style.setProperty("--ocs-fs", `${size}px`);
+		if (!this.content) return;
+		this.content.style.setProperty("--ocs-fs", `${size}px`);
+		this.content.style.fontSize = `${size}px`;
+	}
+
+	/** Adjusts the base font size by `delta` pixels and persists it. */
+	adjustFontSize(delta: number): void {
+		const current = this.plugin.settings.fontSize || 13;
+		const next = Math.min(24, Math.max(9, current + delta));
+		if (next === current) return;
+		this.plugin.settings.fontSize = next;
+		void this.plugin.saveSettings();
+		this.applyFontSize();
+	}
+
+	/** Resets the base font size to the default (13px). */
+	resetFontSize(): void {
+		this.plugin.settings.fontSize = 13;
+		void this.plugin.saveSettings();
+		this.applyFontSize();
 	}
 
 	/** Keeps the composer hint honest about the Enter-to-send behavior. */
