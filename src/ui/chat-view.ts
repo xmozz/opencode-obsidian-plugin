@@ -1377,14 +1377,19 @@ export class OpenCodeChatView extends ItemView {
 		if (reasoning.length > 0 || tools.length > 0) {
 			const working = this.createWorkingBlock(sessionId);
 			if (reasoning.length > 0) {
+				const thinking = document.createElement("details");
+				thinking.className = "ocs-working-thinking";
+				thinking.open = false;
+				const tsum = el("summary", "ocs-working-sub", "Thinking");
+				thinking.appendChild(tsum);
 				const box = el("div", "ocs-working-reasoning");
-				box.appendChild(el("div", "ocs-working-sub", "Thinking"));
 				for (const r of reasoning) {
 					const d = el("div", "ocs-thinking-text");
 					d.innerHTML = renderRich(r);
 					box.appendChild(d);
 				}
-				working.body.appendChild(box);
+				thinking.appendChild(box);
+				working.body.appendChild(thinking);
 			}
 			for (const t of tools) {
 				working.body.appendChild(this.renderTool(t));
@@ -3049,13 +3054,25 @@ export class OpenCodeChatView extends ItemView {
 					const working = this.ensureLiveWorking(tab, live);
 					const body = working.querySelector(".ocs-working-body") as HTMLElement | null;
 					if (body) {
+						let think = body.querySelector(".ocs-live-thinking") as HTMLDetailsElement | null;
+						if (!think) {
+							think = document.createElement("details");
+							think.className = "ocs-live-thinking";
+							think.open = false;
+							const tsum = el("summary", "ocs-working-sub", "Thinking");
+							think.appendChild(tsum);
+							const box = el("div", "ocs-working-reasoning");
+							think.appendChild(box);
+							body.appendChild(think);
+						}
+						const thinkBody = think.querySelector(".ocs-working-reasoning") as HTMLElement;
 						const key = `${tab.sessionId}-r`;
 						let r = this.liveReasoning.get(key);
-						if (!r || r.parentElement !== body) {
+						if (!r || r.parentElement !== thinkBody) {
 							r = el("div", "ocs-live-reasoning-text");
 							this.liveReasoning.set(key, r);
-							body.appendChild(r);
-						} else if (body.lastElementChild !== r) {
+							thinkBody.appendChild(r);
+						} else if (thinkBody.lastElementChild !== r) {
 							// Reasoning resumed after a tool card — start a new
 							// text node so the order inside "Working" stays intact.
 							r = el("div", "ocs-live-reasoning-text");

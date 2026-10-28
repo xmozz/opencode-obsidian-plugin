@@ -503,6 +503,21 @@ button.ocs-copy-btn:active {
 	min-width: 0;
 }
 
+/* Collapsible thinking block nested inside "Working". */
+.ocs-working-thinking,
+.ocs-live-thinking {
+	margin: 2px 0;
+}
+.ocs-working-thinking > summary,
+.ocs-live-thinking > summary {
+	cursor: pointer;
+	list-style: none;
+}
+.ocs-working-thinking > summary::-webkit-details-marker,
+.ocs-live-thinking > summary::-webkit-details-marker {
+	display: none;
+}
+
 .ocs-working-reasoning {
 	min-width: 0;
 	color: var(--text-muted);
