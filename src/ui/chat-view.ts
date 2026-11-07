@@ -77,6 +77,8 @@ interface TabState {
 	variant: string;
 	/** Last mode+agent key pushed to this session (avoids redundant syncs). */
 	appliedMode?: string;
+	/** Set when native history could not be loaded (shown instead of "empty"). */
+	loadError?: string;
 }
 
 interface DiscoveredModel {
@@ -141,12 +143,15 @@ export class OpenCodeChatView extends ItemView {
 	private attachBtn!: HTMLButtonElement;
 	private forkBtn!: HTMLButtonElement;
 	private sendBtn!: HTMLButtonElement;
+	private histBtn!: HTMLButtonElement;
 	private chipsRow!: HTMLElement;
 	private usageBadge!: HTMLElement;
 	private statusLine!: HTMLElement;
 	private connectBanner!: HTMLElement;
 	private connectDetail!: HTMLElement;
 	private historyOpen = false;
+	private historySearch = "";
+	private ensureTabPromise: Promise<TabState | undefined> | null = null;
 	private eventAbort: AbortController | null = null;
 	private modeSyncs = new Map<string, Promise<void>>();
 	private liveAssistant = new Map<string, HTMLElement>();
@@ -227,6 +232,27 @@ export class OpenCodeChatView extends ItemView {
 		this.registerEvent(
 			this.app.workspace.on("active-leaf-change", () => this.syncActiveNote()),
 		);
+		// Close the history popover on Esc or an outside click.
+		this.registerDomEvent(
+			window,
+			"keydown",
+			(e: KeyboardEvent) => {
+				if (e.key === "Escape" && this.historyOpen) {
+					e.preventDefault();
+					e.stopPropagation();
+					this.closeHistory();
+				}
+			},
+			{ capture: true },
+		);
+		this.registerDomEvent(window, "mousedown", (e: MouseEvent) => {
+			if (!this.historyOpen) return;
+			const target = e.target as HTMLElement | null;
+			if (!target) return;
+			if (this.historyPanel.contains(target)) return;
+			if (this.histBtn && this.histBtn.contains(target)) return;
+			this.closeHistory();
+		});
 	}
 
 	/** Default: the focused file is attached when the chat starts. */
@@ -274,24 +300,24 @@ export class OpenCodeChatView extends ItemView {
 		this.usageBadge = el("span", "ocs-usage-badge", "");
 		this.usageBadge.title = "Tokens · cost · context window";
 		const fontDecBtn = el("button", "ocs-icon-btn", "A−");
-		fontDecBtn.title = "Schrift verkleinern";
+		fontDecBtn.title = "Decrease font size";
 		fontDecBtn.onclick = () => this.adjustFontSize(-1);
 		actions.appendChild(fontDecBtn);
 
 		const fontIncBtn = el("button", "ocs-icon-btn", "A+");
-		fontIncBtn.title = "Schrift vergrößern";
+		fontIncBtn.title = "Increase font size";
 		fontIncBtn.onclick = () => this.adjustFontSize(1);
 		actions.appendChild(fontIncBtn);
 
 		const fontResetBtn = el("button", "ocs-icon-btn", "A");
-		fontResetBtn.title = "Schrift zurücksetzen";
+		fontResetBtn.title = "Reset font size";
 		fontResetBtn.onclick = () => this.resetFontSize();
 		actions.appendChild(fontResetBtn);
 
-		const histBtn = el("button", "ocs-icon-btn", "☰");
-		histBtn.title = "Sessions (/session) — shared with CLI";
-		histBtn.onclick = () => this.toggleHistory();
-		actions.appendChild(histBtn);
+		this.histBtn = el("button", "ocs-icon-btn");
+		setIconOrText(this.histBtn, "history", "☰", "Sessions (/session) — shared with CLI");
+		this.histBtn.onclick = () => this.toggleHistory();
+		actions.appendChild(this.histBtn);
 		const menuBtn = el("button", "ocs-icon-btn", "⋯");
 		menuBtn.title = "Tab actions";
 		menuBtn.onclick = (e) => this.openTabMenu(e as MouseEvent);
@@ -369,6 +395,8 @@ export class OpenCodeChatView extends ItemView {
 		this.composerText.rows = 3;
 		this.updateComposerPlaceholder();
 		this.composerText.onkeydown = (e) => {
+			// IME composition: Enter confirms a candidate, it must not send.
+			if (e.isComposing) return;
 			if (this.slashOpen) {
 				if (e.key === "ArrowDown") {
 					e.preventDefault();
@@ -993,15 +1021,44 @@ export class OpenCodeChatView extends ItemView {
 		}
 	}
 
-	private attachFile(path: string): void {
-		const tab = this.activeTab();
+	/**
+	 * Returns the active tab, creating a session on the fly when none is open.
+	 * Concurrent callers (e.g. a drop carrying images + files) share one
+	 * in-flight creation so only a single session is started.
+	 */
+	private ensureSessionTab(): Promise<TabState | undefined> {
+		const existing = this.activeTab();
+		if (existing) return Promise.resolve(existing);
+		if (this.ensureTabPromise) return this.ensureTabPromise;
+		this.ensureTabPromise = (async () => {
+			try {
+				await this.newTab();
+				return this.activeTab();
+			} finally {
+				this.ensureTabPromise = null;
+			}
+		})();
+		return this.ensureTabPromise;
+	}
+
+	/** Runs `action` against a tab, opening a session first when none is open. */
+	private async withSessionTab(
+		action: (tab: TabState) => void | Promise<void>,
+	): Promise<void> {
+		const tab = await this.ensureSessionTab();
 		if (!tab) return;
-		tab.autoAttached = false;
-		if (!tab.contextFiles.includes(path) && tab.activeNote !== path) {
-			tab.contextFiles.push(path);
-		}
-		this.renderChips();
-		this.persistTabs();
+		await action(tab);
+	}
+
+	private attachFile(path: string): void {
+		void this.withSessionTab((tab) => {
+			tab.autoAttached = false;
+			if (!tab.contextFiles.includes(path) && tab.activeNote !== path) {
+				tab.contextFiles.push(path);
+			}
+			this.renderChips();
+			this.persistTabs();
+		});
 	}
 
 	private detachActiveNote(): void {
@@ -1039,54 +1096,56 @@ export class OpenCodeChatView extends ItemView {
 
 	/** Shared sink for explorer-picked and dropped files. */
 	private addPickedFiles(files: File[]): void {
-		const tab = this.activeTab();
-		if (!tab || files.length === 0) return;
-		const vaultDir = this.plugin.vaultDir();
-		const unresolved: string[] = [];
-		for (const f of files) {
-			const nativePath = getNativeFilePath(f);
-			if (!nativePath) {
-				unresolved.push(f.name);
-				continue;
+		if (files.length === 0) return;
+		void this.withSessionTab((tab) => {
+			const vaultDir = this.plugin.vaultDir();
+			const unresolved: string[] = [];
+			for (const f of files) {
+				const nativePath = getNativeFilePath(f);
+				if (!nativePath) {
+					unresolved.push(f.name);
+					continue;
+				}
+				const ref = fileContextReference(f.name, vaultDir, nativePath);
+				if (!tab.contextFiles.includes(ref) && tab.activeNote !== ref) {
+					tab.contextFiles.push(ref);
+				}
 			}
-			const ref = fileContextReference(f.name, vaultDir, nativePath);
-			if (!tab.contextFiles.includes(ref) && tab.activeNote !== ref) {
-				tab.contextFiles.push(ref);
+			if (unresolved.length > 0) {
+				new Notice(
+					`Could not get the full filesystem path for: ${unresolved.join(", ")}. Try selecting the file again.`,
+				);
 			}
-		}
-		if (unresolved.length > 0) {
-			new Notice(
-				`Could not get the full filesystem path for: ${unresolved.join(", ")}. Try selecting the file again.`,
-			);
-		}
-		tab.autoAttached = false;
-		this.renderChips();
-		this.persistTabs();
+			tab.autoAttached = false;
+			this.renderChips();
+			this.persistTabs();
+		});
 	}
 
 	/** Shared sink for pasted and dropped images. */
 	private attachImageFiles(files: File[]): void {
-		const tab = this.activeTab();
-		if (!tab) return;
-		for (const file of files.slice(0, 5)) {
-			if (file.size > 10 * 1024 * 1024) {
-				new Notice(`Image too large (max 10 MB): ${file.name || "image"}`);
-				continue;
-			}
-			const reader = new FileReader();
-			reader.onload = () => {
-				const dataUrl = String(reader.result ?? "");
-				if (dataUrl.startsWith("data:image")) {
-					tab.images.push({
-						id: `img-${Date.now()}-${Math.random().toString(36).slice(2)}`,
-						name: file.name || "image",
-						dataUrl,
-					});
-					this.renderChips();
+		if (files.length === 0) return;
+		void this.withSessionTab((tab) => {
+			for (const file of files.slice(0, 5)) {
+				if (file.size > 10 * 1024 * 1024) {
+					new Notice(`Image too large (max 10 MB): ${file.name || "image"}`);
+					continue;
 				}
-			};
-			reader.readAsDataURL(file);
-		}
+				const reader = new FileReader();
+				reader.onload = () => {
+					const dataUrl = String(reader.result ?? "");
+					if (dataUrl.startsWith("data:image")) {
+						tab.images.push({
+							id: `img-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+							name: file.name || "image",
+							dataUrl,
+						});
+						this.renderChips();
+					}
+				};
+				reader.readAsDataURL(file);
+			}
+		});
 	}
 
 	private removeImage(id: string): void {
@@ -1261,14 +1320,23 @@ export class OpenCodeChatView extends ItemView {
 		this.content.appendChild(list);
 		this.mountJumpBtn();
 		if (!tab.loaded) {
-			list.appendChild(el("div", "ocs-wait", "Loading native session history…"));
+			const wait = el("div", "ocs-wait");
+			wait.appendChild(el("span", "ocs-spinner"));
+			wait.appendChild(el("span", "", "Loading native session history…"));
+			list.appendChild(wait);
 			this.updateJumpBtn();
 			return;
 		}
 		if (tab.messages.length === 0 && !this.queuedFor(tab.tabId).length) {
-			list.appendChild(
-				el("div", "ocs-empty", "Empty session — say hello."),
-			);
+			if (tab.loadError) {
+				list.appendChild(
+					el("div", "ocs-error-block", `Could not load history: ${tab.loadError}`),
+				);
+			} else {
+				list.appendChild(
+					el("div", "ocs-empty", "Empty session — say hello."),
+				);
+			}
 		}
 		const msgs = tab.messages;
 		for (let i = 0; i < msgs.length; i++) {
@@ -1323,12 +1391,18 @@ export class OpenCodeChatView extends ItemView {
 		}
 		const client = this.plugin.client;
 		if (!client || tab.sessionId.startsWith("pending-")) return;
+		const isActive = tab.tabId === this.activeTabId;
+		if (isActive) this.setStatus("Loading session history…");
 		try {
 			tab.messages = await loadSessionMessages(client, tab.sessionId);
 			tab.loaded = true;
-		} catch {
+			tab.loadError = undefined;
+			if (isActive) this.setStatus("");
+		} catch (e) {
 			tab.messages = [];
 			tab.loaded = true;
+			tab.loadError = errMsg(e);
+			if (isActive) this.setStatus(`Could not load history: ${errMsg(e)}`);
 		}
 		// Usage: cost is cumulative (session total), but the token count shown
 		// must be the LAST turn's context — the session token sum is cumulative
@@ -1502,13 +1576,27 @@ export class OpenCodeChatView extends ItemView {
 		if (!raw) return;
 
 		// No active session: start one on the fly so a plain message has a home.
-		// Slash commands are left alone — they either need no session (/new,
-		// /session) or a specific tab to act on.
 		if (!tab && !raw.startsWith("/")) {
 			tab = await this.ensureSessionForSend();
 			if (!tab) return; // could not create (still connecting) — keep the draft
 		}
-		if (!tab) return;
+		if (!tab) {
+			// Session-less slash commands still work; the rest need a tab to act on.
+			if (raw === "/session") {
+				this.openHistory();
+				this.composerText.value = "";
+				this.closeSlashMenu();
+				return;
+			}
+			if (raw === "/new") {
+				this.composerText.value = "";
+				this.closeSlashMenu();
+				void this.newTab();
+				return;
+			}
+			new Notice("This command needs an open session — type /new to create one.");
+			return; // keep the draft
+		}
 
 		this.composerText.value = "";
 		this.closeSlashMenu();
@@ -1936,6 +2024,9 @@ export class OpenCodeChatView extends ItemView {
 		this.renderModelBtn();
 		this.renderAgentBtn();
 		this.setStatus("");
+		// Agents are now known — apply the permission mode so read-only sessions
+		// actually switch to the native plan agent (fixes the connect-time race).
+		this.applyPermissionMode();
 	}
 
 	/** Re-renders model/agent/effort pickers to match the active tab. */
@@ -2025,6 +2116,7 @@ export class OpenCodeChatView extends ItemView {
 
 	private openHistory(): void {
 		this.historyOpen = true;
+		this.historySearch = "";
 		this.historyPanel.removeClass("ocs-hidden");
 		void this.refreshHistory();
 	}
@@ -2071,15 +2163,16 @@ export class OpenCodeChatView extends ItemView {
 		this.historyPanel.empty();
 		const head = el("div", "ocs-history-head");
 		head.appendChild(el("span", "ocs-history-title", `Sessions · ${sessions.length} (shared with CLI)`));
-		const refBtn = el("button", "ocs-icon-btn", "⟳");
-		refBtn.title = "Refresh (/session)";
+		const refBtn = el("button", "ocs-icon-btn");
+		setIconOrText(refBtn, "refresh-cw", "⟳", "Refresh (/session)");
 		refBtn.onclick = () => void this.refreshHistory();
 		head.appendChild(refBtn);
-		const newBtn = el("button", "ocs-icon-btn", "+");
-		newBtn.title = "New session";
+		const newBtn = el("button", "ocs-icon-btn");
+		setIconOrText(newBtn, "plus", "+", "New session");
 		newBtn.onclick = () => void this.newTab();
 		head.appendChild(newBtn);
-		const closeBtn = el("button", "ocs-icon-btn", "✕");
+		const closeBtn = el("button", "ocs-icon-btn");
+		setIconOrText(closeBtn, "x", "✕", "Close");
 		closeBtn.onclick = () => this.closeHistory();
 		head.appendChild(closeBtn);
 		this.historyPanel.appendChild(head);
@@ -2087,28 +2180,39 @@ export class OpenCodeChatView extends ItemView {
 		const search = document.createElement("input");
 		search.className = "ocs-history-search";
 		search.placeholder = "Search sessions…";
-		search.oninput = () => {
-			const q = search.value.toLowerCase();
+		search.value = this.historySearch;
+		this.historyPanel.appendChild(search);
+		const list = el("div", "ocs-history-list");
+		this.historyPanel.appendChild(list);
+
+		const applyFilter = (): void => {
+			const q = this.historySearch.toLowerCase();
 			list.empty();
-			for (const s of sessions.filter(
+			if (sessions.length === 0) {
+				list.appendChild(
+					el("div", "ocs-history-empty", "No sessions in this vault yet — create one or use the CLI here."),
+				);
+				return;
+			}
+			const filtered = sessions.filter(
 				(x) =>
 					x.title.toLowerCase().includes(q) ||
 					(x.preview ?? "").toLowerCase().includes(q) ||
 					x.id.toLowerCase().includes(q),
-			)) {
-				list.appendChild(this.historyRow(s));
-			}
-		};
-		this.historyPanel.appendChild(search);
-		const list = el("div", "ocs-history-list");
-		this.historyPanel.appendChild(list);
-		if (sessions.length === 0) {
-			list.appendChild(
-				el("div", "ocs-history-empty", "No sessions in this vault yet — create one or use the CLI here."),
 			);
-		}
-		const sorted = [...sessions].sort((a, b) => b.updated - a.updated);
-		for (const s of sorted) list.appendChild(this.historyRow(s));
+			if (filtered.length === 0) {
+				list.appendChild(el("div", "ocs-history-empty", "No matching sessions."));
+				return;
+			}
+			const sorted = [...filtered].sort((a, b) => b.updated - a.updated);
+			for (const s of sorted) list.appendChild(this.historyRow(s));
+		};
+		search.oninput = () => {
+			this.historySearch = search.value;
+			applyFilter();
+		};
+		applyFilter();
+
 		if (this.historyNext) {
 			const more = el("button", "ocs-history-more", "Load more sessions");
 			more.onclick = () => void this.loadMoreHistory();
@@ -2175,8 +2279,8 @@ export class OpenCodeChatView extends ItemView {
 		main.title = s.id;
 		main.onclick = () => void this.openSession(s);
 		row.appendChild(main);
-		const del = el("button", "ocs-icon-btn", "🗑");
-		del.title = "Delete session in opencode";
+		const del = el("button", "ocs-icon-btn");
+		setIconOrText(del, "trash-2", "🗑", "Delete session in opencode");
 		del.onclick = () => {
 			const client = this.plugin.client;
 			if (!client) return;
@@ -2635,9 +2739,9 @@ export class OpenCodeChatView extends ItemView {
 				const sid = (data.sessionID ?? data.id) as string;
 				const t = sid && this.tabFor(sid);
 				if (t) {
-					t.title += " (deleted)";
-					if (t.tabId === this.activeTabId) this.renderContent();
-					this.renderTabs();
+					const title = t.title;
+					this.closeTab(t.tabId);
+					new Notice(`Session "${title}" was deleted (visible in CLI too)`);
 				}
 				break;
 			}
@@ -3327,7 +3431,7 @@ export class OpenCodeChatView extends ItemView {
 		void this.refreshHistory();
 		this.startEventLoop();
 		void this.flushQueue();
-		// Apply the current permission mode to any sessions restored on load.
-		this.applyPermissionMode();
+		// Permission mode is (re)applied once the agent catalog has loaded, in
+		// refreshCatalogs(), so read-only sessions switch to the plan agent.
 	}
 }

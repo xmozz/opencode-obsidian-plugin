@@ -226,6 +226,13 @@
 	padding: 24px 12px;
 }
 
+.ocs-wait {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	gap: 8px;
+}
+
 /* jump-to-newest: floats over the list while the user reads above the tail */
 .ocs-jump-btn {
 	position: absolute;

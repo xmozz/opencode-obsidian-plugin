@@ -254,10 +254,10 @@ class OpenCodeSettingTab extends PluginSettingTab {
 			);
 		new Setting(containerEl)
 			.setName("Font size")
-			.setDesc("Base font size of the chat panel (everything scales with it).")
+			.setDesc("Base font size of the chat messages — answers, tool calls and reasoning scale with it (also adjustable with A− / A+ or Ctrl+scroll).")
 			.addSlider((s) =>
 				s
-					.setLimits(10, 20, 1)
+					.setLimits(9, 24, 1)
 					.setValue(this.plugin.settings.fontSize)
 					.setDynamicTooltip()
 					.onChange(async (v) => {

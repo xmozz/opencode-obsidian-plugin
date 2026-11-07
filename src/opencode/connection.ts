@@ -121,14 +121,49 @@ function exeBehindShim(shimPath: string): string | null {
 	return null;
 }
 
-function runWhere(binary: string): string[] {
+/** Asynchronously runs a command and captures stdout/stderr (no main-thread block). */
+function capture(
+	command: string,
+	args: string[],
+	timeoutMs = 10000,
+): Promise<{ stdout: string; stderr: string }> {
+	return new Promise((resolve) => {
+		const child = spawn(command, args, { windowsHide: true });
+		let stdout = "";
+		let stderr = "";
+		child.stdout?.on("data", (d: Buffer) => (stdout += d.toString("utf8")));
+		child.stderr?.on("data", (d: Buffer) => (stderr += d.toString("utf8")));
+		let settled = false;
+		const done = (): void => {
+			if (settled) return;
+			settled = true;
+			resolve({ stdout, stderr });
+		};
+		const timer = setTimeout(() => {
+			try {
+				child.kill();
+			} catch {
+				/* already gone */
+			}
+			done();
+		}, timeoutMs);
+		child.once("close", () => {
+			clearTimeout(timer);
+			done();
+		});
+		child.once("error", () => {
+			clearTimeout(timer);
+			done();
+		});
+	});
+}
+
+async function runWhere(binary: string): Promise<string[]> {
 	try {
 		const cmd = isWin() ? "where.exe" : "which";
 		const args = isWin() ? [binary] : ["-a", binary];
-		const { spawnSync } = require("node:child_process") as typeof import("node:child_process");
-		const res = spawnSync(cmd, args, { encoding: "utf8", windowsHide: true });
-		const out = typeof res.stdout === "string" ? res.stdout : "";
-		return out.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+		const { stdout } = await capture(cmd, args);
+		return stdout.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
 	} catch {
 		return [];
 	}
@@ -140,7 +175,7 @@ export interface ResolvedBinary {
 }
 
 /** Resolve a spawnable native binary. Never returns a .cmd/.ps1 shim. */
-export function resolveBinary(configured: string): ResolvedBinary {
+export async function resolveBinary(configured: string): Promise<ResolvedBinary> {
 	const tried: string[] = [];
 	const name = (configured || "").trim() || "opencode";
 
@@ -162,7 +197,7 @@ export function resolveBinary(configured: string): ResolvedBinary {
 		);
 	}
 
-	for (const found of runWhere(name)) {
+	for (const found of await runWhere(name)) {
 		tried.push(found);
 		const ext = path.extname(found).toLowerCase();
 		if (!isWin() || ext === ".exe") {
@@ -227,15 +262,13 @@ function enhancedPath(): string {
 }
 
 /** Probe `<bin> --version`. Returns null when it cannot be determined. */
-export function probeVersion(binary: string, events: string[]): string | null {
+export async function probeVersion(
+	binary: string,
+	events: string[],
+): Promise<string | null> {
 	try {
-		const { spawnSync } = require("node:child_process") as typeof import("node:child_process");
-		const res = spawnSync(binary, ["--version"], {
-			encoding: "utf8",
-			windowsHide: true,
-			timeout: 10000,
-		});
-		const out = `${res.stdout ?? ""} ${res.stderr ?? ""}`;
+		const { stdout, stderr } = await capture(binary, ["--version"]);
+		const out = `${stdout} ${stderr}`;
 		const m = /(?:^|\s)v?(\d+)\.(\d+)\.(\d+)/.exec(out);
 		if (m) {
 			const version = `${m[1]}.${m[2]}.${m[3]}`;
@@ -437,11 +470,11 @@ export async function connectShared(
 		}
 		say("no running service discovered");
 
-		const resolved = resolveBinary(opencodeBin);
+		const resolved = await resolveBinary(opencodeBin);
 		attempt.resolvedPath = resolved.path;
 		attempt.tried = resolved.tried;
 		say(`resolved binary: ${resolved.path}`);
-		const version = probeVersion(resolved.path, attempt.events);
+		const version = await probeVersion(resolved.path, attempt.events);
 		if (version) {
 			say(`opencode version: ${version}`);
 			const major = Number(version.split(".")[0]);
