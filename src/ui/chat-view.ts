@@ -184,6 +184,10 @@ export class OpenCodeChatView extends ItemView {
 	private jumpBtn!: HTMLButtonElement;
 	/** Follow-the-tail toggle: paused when the user scrolls away from the bottom. */
 	private autoScroll = true;
+	/** Last reading position (scrollTop) captured while the user was scrolled up.
+	 *  Restored after an in-place re-render (e.g. markdown finalization) so the
+	 *  view isn't yanked back to the top of the chat. */
+	private savedScrollTop: number | null = null;
 	/** Active tab of the last render; a tab switch re-arms auto-scroll. */
 	private lastRenderedTabId: string | null = null;
 
@@ -1295,12 +1299,21 @@ export class OpenCodeChatView extends ItemView {
 	}
 
 	private renderContent(): void {
+		// A same-tab re-render (e.g. the stream finishing and the answer being
+		// re-rendered as markdown) must not yank a user who scrolled up back to
+		// the top. Remember their reading position so the rebuilt list can be
+		// restored to it once the asynchronous markdown has settled.
+		const sameTab = this.activeTabId === this.lastRenderedTabId;
+		const preserveTop = sameTab && !this.autoScroll ? this.savedScrollTop : null;
+
 		this.content.empty();
-		// Switching tabs re-arms follow-the-tail: each tab opens at its tail.
-		if (this.activeTabId !== this.lastRenderedTabId) {
+		if (!sameTab) {
+			// Switching tabs re-arms follow-the-tail: each tab opens at its tail.
 			this.autoScroll = true;
+			this.savedScrollTop = null;
 			this.lastRenderedTabId = this.activeTabId;
 		}
+		this.messageRenderer.beginRender();
 		this.renderChips();
 		this.renderQueueBar();
 		this.refreshPickers();
@@ -1370,6 +1383,7 @@ export class OpenCodeChatView extends ItemView {
 		if (live && live.parentElement !== list) list.appendChild(live);
 		this.renderPendingCards(tab);
 		this.scrollListToBottom(list);
+		if (preserveTop !== null && list) this.restoreScrollPosition(list, preserveTop);
 		this.updateUsageBadge();
 	}
 
@@ -2453,6 +2467,7 @@ export class OpenCodeChatView extends ItemView {
 	/** Re-arms follow-the-tail and jumps to the newest message. */
 	private jumpToBottom(): void {
 		this.autoScroll = true;
+		this.savedScrollTop = null;
 		this.scrollListToBottom(this.messageListEl(), true);
 		this.updateJumpBtn();
 	}
@@ -2461,9 +2476,26 @@ export class OpenCodeChatView extends ItemView {
 	private onListScroll = (): void => {
 		const list = this.messageListEl();
 		if (!list) return;
-		this.autoScroll = this.isListAtBottom(list);
+		const atBottom = this.isListAtBottom(list);
+		this.autoScroll = atBottom;
+		this.savedScrollTop = atBottom ? null : list.scrollTop;
 		this.updateJumpBtn();
 	};
+
+	/**
+	 * Restores the user's reading position on a freshly rebuilt list after the
+	 * asynchronous markdown rendering has settled. Rendering content above the
+	 * anchor grows the list, so restoring too early would be clamped away.
+	 * No-op when the list was superseded or the user re-armed auto-scroll.
+	 */
+	private restoreScrollPosition(list: HTMLElement, top: number): void {
+		void this.messageRenderer.whenRendered().then(() => {
+			if (this.messageListEl() !== list) return; // superseded by a newer render
+			if (this.autoScroll) return; // user returned to the tail
+			list.scrollTop = this.savedScrollTop ?? top;
+			this.updateJumpBtn();
+		});
+	}
 
 	/**
 	 * Collapsible "Working" block that gathers everything the agent does

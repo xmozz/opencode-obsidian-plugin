@@ -34,7 +34,20 @@ export interface MessageRendererHost {
 
 /** Owns static message/diff rendering; live stream updates remain in the view. */
 export class ChatMessageRenderer {
+	/** Pending async markdown render tasks for the current render pass. */
+	private renderTasks: Promise<unknown>[] = [];
+
 	constructor(private readonly host: MessageRendererHost) {}
+
+	/** Called at the start of each render pass so `whenRendered` tracks only it. */
+	beginRender(): void {
+		this.renderTasks = [];
+	}
+
+	/** Resolves once every async markdown render in the current pass has settled. */
+	whenRendered(): Promise<void> {
+		return Promise.allSettled(this.renderTasks.slice()).then(() => {});
+	}
 
 	renderMessage(message: ChatMessage, sessionId: string): HTMLElement {
 		if (message.role === "compaction") {
@@ -163,9 +176,16 @@ export class ChatMessageRenderer {
 		const rendered = document.createElement("div");
 		rendered.classList.add("markdown-rendered");
 		container.appendChild(rendered);
-		MarkdownRenderer.render(this.host.app, converted, rendered, "", this.host.component).catch(() => {
+		const task = MarkdownRenderer.render(
+			this.host.app,
+			converted,
+			rendered,
+			"",
+			this.host.component,
+		).catch(() => {
 			rendered.innerHTML = renderRich(text);
 		});
+		this.renderTasks.push(task);
 	}
 
 	private renderTool(tool: ChatMessage["tools"][number]): HTMLElement {
